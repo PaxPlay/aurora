@@ -165,7 +165,7 @@ impl BasicScene3d {
         let device = window.application.gpu_state.device.clone();
         use crate::shader::ShaderManager;
         let mut sm = ShaderManager::new(device.clone());
-        register_default!(sm, "basic3d", "../shader/basic3d.wgsl");
+        register_default!(sm, "basic3d", "shader/basic3d.wgsl");
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Basic 3D Pipeline Layout"),

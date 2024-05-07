@@ -143,7 +143,7 @@ impl ShaderManager  {
     }
 
     pub fn invalidate_dynamic_shaders(&mut self) {
-        for (_, shader) in self.shaders {
+        for (_, shader) in &self.shaders {
             if shader.is_dynamic() {
                 shader.invalidate();
             }
@@ -175,10 +175,10 @@ macro_rules! register_default {
     ($sm:expr, $name:expr, $file:expr) => {
         cfg_if::cfg_if! {
             if #[cfg(feature = "dynamic_shaders")] {
-                $sm.register_wgsl($name, $file)
+                $sm.register_wgsl(String::from($name), String::from($file))
             } else {
                 $sm.register_wgsl_static($name,
-                    wgpu::ShaderSource::Wgsl(include_str!($file).into())
+                    wgpu::ShaderSource::Wgsl(include_str!(concat!("../", $file)).into())
                 );
             }
         }
