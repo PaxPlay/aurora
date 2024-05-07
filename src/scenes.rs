@@ -1,8 +1,12 @@
 use glam::{Vec3, Vec4, Mat3, Mat4};
 use glam::{vec3, vec4, mat3, mat4};
 
+use std::f32::consts::*;
+use wgpu::{PipelineLayout, RenderPass};
+use crate::{AuroraWindow, GpuState, register_default};
+
 pub trait Scene {
-    fn render();
+    fn render<'a>(&'a mut self, render_pass: &mut RenderPass<'a>);
 }
 
 #[derive(Copy, Clone)]
@@ -41,27 +45,27 @@ impl Angle {
 
     fn normalize(self) -> Self {
         let mut res = self.clone();
-        while res.pitch > f32::PI() {
-            res.pitch -= 2.0f32 * f32::PI();
+        while res.pitch > PI {
+            res.pitch -= 2.0f32 * PI;
         }
-        while res.pitch < -f32::PI() {
-            res.pitch += 2.0f32 * f32::PI();
-        }
-
-        if res.pitch > f32::FRAC_PI_2() {
-            res.pitch = f32::PI() - res.pitch;
-            res.yaw += f32::PI();
-        }
-        if res.pitch < -f32::FRAC_PI_2() {
-            res.pitch = -f32::PI() - res.pitch;
-            res.yaw += f32::PI();
+        while res.pitch < -PI {
+            res.pitch += 2.0f32 * PI;
         }
 
-        while res.yaw > f32::PI() {
-            res.yaw -= 2.0f32 * f32::PI();
+        if res.pitch > FRAC_PI_2 {
+            res.pitch = PI - res.pitch;
+            res.yaw += PI;
         }
-        while res.yaw < -f32::PI() {
-            res.yaw += 2.0f32 * f32::PI();
+        if res.pitch < -FRAC_PI_2 {
+            res.pitch = -PI - res.pitch;
+            res.yaw += PI;
+        }
+
+        while res.yaw > PI {
+            res.yaw -= 2.0f32 * PI;
+        }
+        while res.yaw < -PI {
+            res.yaw += 2.0f32 * PI;
         }
 
         res
@@ -69,12 +73,12 @@ impl Angle {
 
     fn up(self) -> Vec3 {
         let mut res = self;
-        res.pitch += f32::FRAC_PI_2();
+        res.pitch += FRAC_PI_2;
         res.normalize().direction()
     }
 }
 
-pub enum Camera {
+pub enum Camera3d {
     Centered {
         position: Vec3,
         angle: Angle,
@@ -102,22 +106,36 @@ pub enum Camera {
     }
 }
 
-impl Camera {
+impl Camera3d {
+    fn default() -> Self {
+        Self::Centered {
+            position: vec3(0.0f32, 0.0f32,0.0f32 ),
+            angle: Angle::from(vec3(0.0f32, 0.0f32, 0.0f32)),
+            distance: 10.0f32,
+            fov: 60.0f32,
+            near: 0.1f32,
+            far: 50.0f32,
+            aspect_ratio: 16.0f32 / 9.0f32
+        }
+    }
+}
+
+impl Camera3d {
     fn view_projection_matrix(self) -> Mat4 {
         match self {
-            Camera::Centered {
+            Camera3d::Centered {
                 position, angle, distance, fov, near, far, aspect_ratio
             } => {
                 Mat4::perspective_lh(fov.to_radians(), aspect_ratio, near, far)
                     * Mat4::look_at_lh(position - angle.direction() * distance, position, angle.up())
             },
-            Camera::Perspective {
+            Camera3d::Perspective {
                 position, angle, fov, near, far, aspect_ratio
             } => {
                 Mat4::perspective_lh(fov.to_radians(), aspect_ratio, near, far)
                     * Mat4::look_at_lh(position, position + angle.direction(), angle.up())
             }
-            Camera::Orthographic {
+            Camera3d::Orthographic {
                 position, angle, zoom, near, far, aspect_ratio
             } => {
                 let right = zoom * aspect_ratio;
@@ -134,5 +152,74 @@ impl Camera {
 
     fn handle_mouse_movement() {
 
+    }
+}
+
+pub struct BasicScene3d {
+    camera: Camera3d,
+    pipeline: wgpu::RenderPipeline
+}
+
+impl BasicScene3d {
+    pub fn new(window: &AuroraWindow) -> Self {
+        let device = window.application.gpu_state.device.clone();
+        use crate::shader::ShaderManager;
+        let mut sm = ShaderManager::new(device.clone());
+        register_default!(sm, "basic3d", "../shader/basic3d.wgsl");
+
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Basic 3D Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[]
+        });
+
+
+        let shader = sm.get_shader("basic3d").unwrap();
+        let pipeline =  device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Basic 3D Pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: shader.get_module().as_ref(),
+                entry_point: "vs_main",
+                buffers: &[]
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader.get_module().as_ref(),
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: window.application.gpu_state.get_surface_format(),
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL
+                })]
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false
+            },
+            multiview: None
+        });
+
+        BasicScene3d {
+            camera: Camera3d::default(),
+            pipeline
+        }
+    }
+}
+
+impl Scene for BasicScene3d {
+    fn render<'a>(&'a mut self, render_pass: &mut RenderPass<'a>) {
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.draw(0..3, 0..1);
     }
 }

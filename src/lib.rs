@@ -1,11 +1,15 @@
-mod scenes;
+pub mod scenes;
+mod shader;
 
+use std::cell::{Ref, RefCell};
 use winit::{
     window::{Window, WindowBuilder},
     event_loop::EventLoop,
     event::{Event, WindowEvent},
 };
 use std::default::Default;
+use std::sync::Arc;
+use crate::scenes::Scene;
 
 pub struct AuroraWindow {
     event_loop: EventLoop<()>,
@@ -44,16 +48,21 @@ impl AuroraWindow {
             _ => ()
         }).unwrap();
     }
+
+    pub fn set_scene(&mut self, scene: Arc<RefCell<dyn scenes::Scene>>) {
+        self.application.scene = Some(scene);
+    }
 }
 
 pub struct Application {
-    gpu_state: GpuState
+    gpu_state: GpuState,
+    scene: Option<Arc<RefCell<dyn scenes::Scene>>>
 }
 
 impl Application {
     pub fn new(window: Window) -> Self {
         let gpu_state = pollster::block_on(GpuState::new(window));
-        Application { gpu_state }
+        Application { gpu_state, scene: None }
     }
     fn think_and_draw(&mut self) -> bool {
         match self.render() {
@@ -75,7 +84,7 @@ impl Application {
             });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Clear Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -94,6 +103,17 @@ impl Application {
                 occlusion_query_set: None,
                 timestamp_writes: None
             });
+
+            match &self.scene {
+                None => {}
+                Some(s) => {
+                    let mut scene = s.borrow_mut();
+                    {
+                        let mut _render_pass = _render_pass;
+                        scene.render(&mut _render_pass);
+                    }
+                }
+            }
         }
 
         self.gpu_state.queue.submit(std::iter::once(encoder.finish()));
@@ -107,7 +127,8 @@ struct GpuState {
     window: Window,
     instance: wgpu::Instance,
     surface: wgpu::Surface,
-    device: wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    device: Arc<wgpu::Device>,
     queue: wgpu::Queue,
     size: winit::dpi::PhysicalSize<u32>,
     surface_config: wgpu::SurfaceConfiguration
@@ -148,7 +169,8 @@ impl GpuState {
         };
         surface.configure(&device, &surface_config);
 
-        Self { window, instance, surface, device, queue, size, surface_config }
+        Self { window, instance, surface, surface_format, device: Arc::new(device), queue, size,
+            surface_config }
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -156,7 +178,11 @@ impl GpuState {
             self.size = new_size;
             self.surface_config.width = new_size.width;
             self.surface_config.height = new_size.height;
-            self.surface.configure(&self.device, &self.surface_config);
+            self.surface.configure(self.device.as_ref(), &self.surface_config);
         }
+    }
+
+    pub fn get_surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_format
     }
 }
