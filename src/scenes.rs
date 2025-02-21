@@ -2,8 +2,9 @@ use glam::{Vec3, Vec4, Mat3, Mat4};
 use glam::{vec3, vec4, mat3, mat4};
 
 use std::f32::consts::*;
-use wgpu::{PipelineLayout, RenderPass};
-use crate::{AuroraWindow, GpuState, register_default};
+use wgpu::{PipelineCompilationOptions, PipelineLayout, RenderPass};
+use crate::{register_default, AuroraWindow, GpuContext};
+use std::sync::Arc;
 
 pub trait Scene {
     fn render<'a>(&'a mut self, render_pass: &mut RenderPass<'a>);
@@ -161,10 +162,10 @@ pub struct BasicScene3d {
 }
 
 impl BasicScene3d {
-    pub fn new(window: &AuroraWindow) -> Self {
-        let device = window.application.gpu_state.device.clone();
+    pub fn new(gpu: Arc<GpuContext>, window: &AuroraWindow) -> Self {
+        let device = &gpu.device;
         use crate::shader::ShaderManager;
-        let mut sm = ShaderManager::new(device.clone());
+        let mut sm = ShaderManager::new(gpu.clone());
         register_default!(sm, "basic3d", "shader/basic3d.wgsl");
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -180,17 +181,19 @@ impl BasicScene3d {
             layout: Some(&layout),
             vertex: wgpu::VertexState {
                 module: shader.get_module().as_ref(),
-                entry_point: "vs_main",
-                buffers: &[]
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default()
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader.get_module().as_ref(),
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: window.application.gpu_state.get_surface_format(),
+                    format: window.surface_format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL
-                })]
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default()
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -207,7 +210,8 @@ impl BasicScene3d {
                 mask: !0,
                 alpha_to_coverage_enabled: false
             },
-            multiview: None
+            multiview: None,
+            cache: None,
         });
 
         BasicScene3d {

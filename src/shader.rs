@@ -4,6 +4,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::fs;
 
+use crate::GpuContext;
+
 enum ShaderSource {
     Static(wgpu::ShaderSource<'static>),
     Dynamic {
@@ -42,16 +44,16 @@ struct DynamicShaderModule {
     name: String,
     source: ShaderSource,
     module: Option<Arc<wgpu::ShaderModule>>,
-    device: Arc<wgpu::Device>
+    gpu: Arc<GpuContext>
 }
 
 impl DynamicShaderModule {
-    fn new(name: String, source: ShaderSource, device: Arc<wgpu::Device>) -> Self {
+    fn new(name: String, source: ShaderSource, gpu: Arc<GpuContext>) -> Self {
         Self {
             name,
             source,
             module: None,
-            device
+            gpu
         }
     }
     fn get_module(&mut self) -> Arc<wgpu::ShaderModule> {
@@ -67,7 +69,7 @@ impl DynamicShaderModule {
 
     fn compile_shader(&mut self) {
         self.module = Some(Arc::new(self.source.build_shader(self.name.as_str(),
-                                                             self.device.as_ref())))
+                                                             &self.gpu.device)))
     }
 
     fn invalidate(&mut self) {
@@ -99,14 +101,14 @@ impl DynamicShaderModuleHandle {
 
 pub struct ShaderManager {
     shaders: HashMap<String, DynamicShaderModuleHandle>,
-    device: Arc<wgpu::Device>
+    gpu: Arc<GpuContext>
 }
 
 impl ShaderManager {
-    pub fn new(device: Arc<wgpu::Device>) -> Self {
+    pub fn new(gpu: Arc<GpuContext>) -> Self {
         Self {
             shaders: HashMap::new(),
-            device
+            gpu
         }
     }
 
@@ -124,7 +126,7 @@ impl ShaderManager{
     fn add_module(&mut self, name: String, source: ShaderSource) {
         let handle = DynamicShaderModuleHandle {
             dynamic_module: Rc::new(RefCell::new(DynamicShaderModule::new(name.to_string(), source,
-                                                                          self.device.clone())))
+                                                                          self.gpu.clone())))
         };
 
         self.shaders.insert(name.to_string(), handle);
