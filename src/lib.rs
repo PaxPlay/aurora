@@ -1,10 +1,12 @@
 pub mod scenes;
 mod shader;
 
+use scenes::Scene;
 use winit::{
     event::WindowEvent, event_loop::ActiveEventLoop, window::Window
 };
-use std::default::Default;
+use std::cell::RefCell;
+use std::{collections::BTreeMap, default::Default};
 use std::sync::Arc;
 
 use log::{debug, info, error};
@@ -13,6 +15,8 @@ use log::{debug, info, error};
 pub struct Aurora {
     gpu: Arc<GpuContext>,
     window: Option<AuroraWindow>,
+    scenes: BTreeMap<String, Box<dyn Scene>>,
+    current_scene: Option<String>,
 }
 
 impl Aurora {
@@ -22,6 +26,8 @@ impl Aurora {
         Ok(Self {
             gpu,
             window: None,
+            scenes: BTreeMap::new(),
+            current_scene: None,
         })
     }
     
@@ -38,12 +44,20 @@ impl Aurora {
         todo!()
     }
 
+    pub fn add_scene(&mut self, name: &str, scene: Box<dyn Scene>) {
+        self.scenes.insert(String::from(name), scene);
+    }
+
     fn get_window_mut(&mut self) -> &mut AuroraWindow {
         self.window.as_mut().unwrap()
     }
 
-    fn get_window(&self) -> &AuroraWindow {
+    pub fn get_window(&self) -> &AuroraWindow {
         self.window.as_ref().unwrap()
+    }
+
+    pub fn get_gpu(&self) -> Arc<GpuContext> {
+        self.gpu.clone()
     }
 
     fn render(&mut self) {
@@ -52,17 +66,32 @@ impl Aurora {
         let view = out_surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let window_size: [u32; 2] = [self.get_window().surface_config.width, self.get_window().surface_config.height];
 
+        let render_cb = if let Some(mut entry) = self.scenes.first_entry() {
+            Some(entry.get_mut().render(self.gpu.clone(), &view))
+        } else {
+            None
+        };
+
         let ui_context = &mut self.get_window_mut().ui_context;
         let ui_cb = ui_context.render(&gpu,  &view, window_size);
 
-        gpu.queue.submit([ui_cb]);
+        match ui_cb {
+            Some(ui_cb) => { gpu.queue.submit([render_cb.unwrap(), ui_cb]); },
+            None => (),
+        }
         out_surface_texture.present();
     }
+
 }
 
 impl winit::application::ApplicationHandler for Aurora {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         self.window = AuroraWindow::new(&self.gpu, event_loop).ok();
+
+        let surface_format = self.get_window().surface_format;
+        if let Some(mut entry) = self.scenes.first_entry() {
+            entry.get_mut().build_pipeline(self.gpu.clone(), surface_format);
+        }
     }
 
     fn window_event(
@@ -236,9 +265,9 @@ impl UiContext {
         });
     }
 
-    pub fn render(&mut self, gpu: &GpuContext, view: &wgpu::TextureView, window_size: [u32; 2]) -> wgpu::CommandBuffer {
+    pub fn render(&mut self, gpu: &GpuContext, view: &wgpu::TextureView, window_size: [u32; 2]) -> Option<wgpu::CommandBuffer> {
         let mut ce = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        {
+        let platform_output = {
             let render_pass = ce.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rp_aurora_ui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -268,9 +297,12 @@ impl UiContext {
 
             self.renderer.update_buffers(&gpu.device, &gpu.queue, &mut ce, &clipped_primitives, &screen_descriptor);
             self.renderer.render(&mut rp_static, &clipped_primitives, &screen_descriptor);
-        }
 
-        ce.finish()
+            ui_out.platform_output
+        };
+        self.state.handle_platform_output(&self.window, platform_output);
+
+        Some(ce.finish())
     }
 
     pub fn on_window_event(&mut self, event: &winit::event::WindowEvent) -> bool {
@@ -282,75 +314,4 @@ impl UiContext {
         result.consumed
     }
 }
-
-/*
-pub struct Application {
-    gpu_state: GpuState,
-    scene: Option<Arc<RefCell<dyn scenes::Scene>>>
-}
-
-impl Application {
-    pub fn new(window: Window) -> Self {
-        let gpu_state = pollster::block_on(GpuState::new(window));
-        Application { gpu_state, scene: None }
-    }
-    fn think_and_draw(&mut self) -> bool {
-        match self.render() {
-            Ok(_) => {},
-            Err(wgpu::SurfaceError::Lost) => self.gpu_state.resize(self.gpu_state.size),
-            Err(wgpu::SurfaceError::OutOfMemory) => return false,
-            Err(e) => log::error!("{:?}", e)
-        }
-
-        true
-    }
-
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.gpu_state.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self.gpu_state.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("Application Render Command Encoder")
-            });
-
-        {
-            let mut _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 1.0,
-                            b: 0.0,
-                            a: 1.0
-                        }),
-                        store: wgpu::StoreOp::Store
-                    }
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None
-            });
-
-            match &self.scene {
-                None => {}
-                Some(s) => {
-                    let mut scene = s.borrow_mut();
-                    {
-                        let mut _render_pass = _render_pass;
-                        scene.render(&mut _render_pass);
-                    }
-                }
-            }
-        }
-
-        self.gpu_state.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        Ok(())_mut
-    }
-}
-*/
 

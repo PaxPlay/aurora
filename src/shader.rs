@@ -56,6 +56,7 @@ impl DynamicShaderModule {
             gpu
         }
     }
+
     fn get_module(&mut self) -> Arc<wgpu::ShaderModule> {
         if self.module.is_none() {
             self.compile_shader();
@@ -186,3 +187,4 @@ macro_rules! register_default {
         }
     };
 }
+

@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-use std::sync::Arc;
 use aurora::Aurora;
 
 fn main() {
@@ -9,8 +7,8 @@ fn main() {
 
 async fn run() {
     let mut aurora = Aurora::new().await.unwrap();
-//    let scene = aurora::scenes::BasicScene3d::new(&window);
-//    window.set_scene(Arc::new(RefCell::new(scene)));
+    let scene = aurora::scenes::BasicScene3d::new();
+    aurora.add_scene("basic_3d", Box::new(scene));
     aurora.run().unwrap();
 }
 

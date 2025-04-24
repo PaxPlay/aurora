@@ -2,14 +2,13 @@ use glam::{Vec3, Vec4, Mat3, Mat4};
 use glam::{vec3, vec4, mat3, mat4};
 
 use std::f32::consts::*;
-use wgpu::{PipelineCompilationOptions, PipelineLayout, RenderPass};
 use crate::{register_default, AuroraWindow, GpuContext};
 use std::sync::Arc;
 
 pub trait Scene {
-    fn render<'a>(&'a mut self, render_pass: &mut RenderPass<'a>);
+    fn build_pipeline(&mut self, gpu: Arc<GpuContext>, surface_format: wgpu::TextureFormat);
+    fn render<'a>(&'a mut self, gpu: Arc<GpuContext>, view: &wgpu::TextureView) -> wgpu::CommandBuffer;
 }
-
 #[derive(Copy, Clone)]
 struct Angle {
     pitch: f32,
@@ -50,8 +49,7 @@ impl Angle {
             res.pitch -= 2.0f32 * PI;
         }
         while res.pitch < -PI {
-            res.pitch += 2.0f32 * PI;
-        }
+            res.pitch += 2.0f32 * PI; }
 
         if res.pitch > FRAC_PI_2 {
             res.pitch = PI - res.pitch;
@@ -158,11 +156,17 @@ impl Camera3d {
 
 pub struct BasicScene3d {
     camera: Camera3d,
-    pipeline: wgpu::RenderPipeline
+    pipeline: Option<wgpu::RenderPipeline>
 }
 
 impl BasicScene3d {
-    pub fn new(gpu: Arc<GpuContext>, window: &AuroraWindow) -> Self {
+    pub fn new() -> Self {
+        Self { camera: Camera3d::default(), pipeline: None }
+    }
+}
+
+impl Scene for BasicScene3d {
+    fn build_pipeline(&mut self, gpu: Arc<GpuContext>, surface_format: wgpu::TextureFormat) {
         let device = &gpu.device;
         use crate::shader::ShaderManager;
         let mut sm = ShaderManager::new(gpu.clone());
@@ -189,7 +193,7 @@ impl BasicScene3d {
                 module: shader.get_module().as_ref(),
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: window.surface_format,
+                    format: surface_format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL
                 })],
@@ -214,16 +218,27 @@ impl BasicScene3d {
             cache: None,
         });
 
-        BasicScene3d {
-            camera: Camera3d::default(),
-            pipeline
+        self.pipeline = Some(pipeline);
+    }
+    fn render<'a>(&'a mut self, gpu: Arc<GpuContext>, view: &wgpu::TextureView) -> wgpu::CommandBuffer {
+        let mut ce = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut render_pass = ce.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("rp_aurora_scene_3d"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            render_pass.set_pipeline(self.pipeline.as_ref().unwrap());
+            render_pass.draw(0..3, 0..1);
         }
+        
+        ce.finish()
     }
 }
 
-impl Scene for BasicScene3d {
-    fn render<'a>(&'a mut self, render_pass: &mut RenderPass<'a>) {
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.draw(0..3, 0..1);
-    }
-}
