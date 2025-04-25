@@ -5,7 +5,7 @@ use scenes::Scene;
 use winit::{
     event::WindowEvent, event_loop::ActiveEventLoop, window::Window
 };
-use std::cell::RefCell;
+use wgpu::util::DeviceExt;
 use std::{collections::BTreeMap, default::Default};
 use std::sync::Arc;
 
@@ -186,6 +186,14 @@ impl GpuContext {
             adapter,
             device,
             queue,
+        })
+    }
+
+    pub fn create_buffer_init<T : bytemuck::Pod>(&self, label: &str, data: &Vec<T>, usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: bytemuck::cast_slice(data.as_slice()),
+            usage,
         })
     }
 }

@@ -7,7 +7,7 @@ fn main() {
 
 async fn run() {
     let mut aurora = Aurora::new().await.unwrap();
-    let scene = aurora::scenes::BasicScene3d::new();
+    let scene = aurora::scenes::BasicScene3d::new("models/cornell_box.obj");
     aurora.add_scene("basic_3d", Box::new(scene));
     aurora.run().unwrap();
 }
