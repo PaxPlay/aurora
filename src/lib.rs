@@ -34,9 +34,10 @@ pub struct Aurora {
 
 impl Aurora {
     /// Prioritized list of texture formats supported by the framework
-    pub const OUT_FORMATS: [wgpu::TextureFormat; 2] = [
-        wgpu::TextureFormat::Rgba32Float,
+    pub const OUT_FORMATS: [wgpu::TextureFormat; 3] = [
+        wgpu::TextureFormat::Rgba16Float,
         wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba32Float,
     ];
 
     pub async fn new() -> Result<Self, ()> {
@@ -73,7 +74,10 @@ impl Aurora {
             .iter()
             .filter(|f| {
                 let features = gpu.adapter.get_texture_format_features(**f);
-                features.allowed_usages.contains(usage)
+                const FEATURES: wgpu::TextureFormatFeatureFlags =
+                    wgpu::TextureFormatFeatureFlags::BLENDABLE;
+
+                features.allowed_usages.contains(usage) && features.flags.contains(FEATURES)
             })
             .map(|f| *f)
             .collect();
@@ -144,17 +148,30 @@ impl Aurora {
         ];
 
         let render_cb = if let Some(mut entry) = self.scenes.first_entry() {
-            Some(entry.get_mut().render(self.gpu.clone(), &view))
+            Some(
+                entry
+                    .get_mut()
+                    .render(self.gpu.clone(), self.target.clone()),
+            )
         } else {
             None
         };
+
+        let mut ce = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aurora_ce_copy"),
+            });
+        let blitter = &self.get_window().texture_blitter;
+        blitter.copy(&gpu.device, &mut ce, &self.target.view, &view);
+        let copy_cb = ce.finish();
 
         let ui_context = &mut self.get_window_mut().ui_context;
         let ui_cb = ui_context.render(&gpu, &view, window_size);
 
         match ui_cb {
             Some(ui_cb) => {
-                gpu.queue.submit([render_cb.unwrap(), ui_cb]);
+                gpu.queue.submit([render_cb.unwrap(), copy_cb, ui_cb]);
             }
             _ => (),
         }
@@ -166,11 +183,10 @@ impl winit::application::ApplicationHandler for Aurora {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         self.window = AuroraWindow::new(&self.gpu, event_loop).ok();
 
-        let surface_format = self.get_window().surface_format;
         if let Some(mut entry) = self.scenes.first_entry() {
             entry
                 .get_mut()
-                .build_pipeline(self.gpu.clone(), surface_format);
+                .build_pipeline(self.gpu.clone(), self.target.clone());
         }
     }
 
@@ -299,10 +315,12 @@ pub struct RenderTarget {
 
 impl RenderTarget {
     fn usage() -> wgpu::TextureUsages {
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
     }
 
-    fn new(gpu: &GpuContext, format: wgpu::TextureFormat) -> Self {
+    pub fn new(gpu: &GpuContext, format: wgpu::TextureFormat) -> Self {
         let width: u32 = 1024;
         let height: u32 = 1024;
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -337,6 +355,7 @@ pub struct AuroraWindow {
     pub surface_format: wgpu::TextureFormat,
     surface_config: wgpu::SurfaceConfiguration,
     ui_context: UiContext,
+    texture_blitter: wgpu::util::TextureBlitter,
 }
 
 impl AuroraWindow {
@@ -373,12 +392,15 @@ impl AuroraWindow {
         surface.configure(&gpu.device, &surface_config);
         let ui_context = UiContext::new(gpu, window.clone(), surface_format);
 
+        let texture_blitter = wgpu::util::TextureBlitter::new(&gpu.device, surface_format);
+
         Ok(Self {
             window,
             surface,
             surface_format,
             surface_config,
             ui_context,
+            texture_blitter,
         })
     }
 }
