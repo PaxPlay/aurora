@@ -43,7 +43,7 @@ impl ShaderSource {
 struct DynamicShaderModule {
     name: String,
     source: ShaderSource,
-    module: Option<Arc<wgpu::ShaderModule>>,
+    module: Option<wgpu::ShaderModule>,
     device: wgpu::Device,
 }
 
@@ -57,7 +57,7 @@ impl DynamicShaderModule {
         }
     }
 
-    fn get_module(&mut self) -> Arc<wgpu::ShaderModule> {
+    fn get_module(&mut self) -> wgpu::ShaderModule {
         if self.module.is_none() {
             self.compile_shader();
         }
@@ -69,9 +69,7 @@ impl DynamicShaderModule {
     }
 
     fn compile_shader(&mut self) {
-        self.module = Some(Arc::new(
-            self.source.build_shader(self.name.as_str(), &self.device),
-        ))
+        self.module = Some(self.source.build_shader(self.name.as_str(), &self.device))
     }
 
     fn invalidate(&mut self) {
@@ -85,7 +83,7 @@ pub struct DynamicShaderModuleHandle {
 }
 
 impl DynamicShaderModuleHandle {
-    pub fn get_module(&self) -> Arc<wgpu::ShaderModule> {
+    pub fn get_module(&self) -> wgpu::ShaderModule {
         return self.dynamic_module.borrow_mut().get_module();
     }
 
@@ -156,17 +154,17 @@ impl ShaderManager {
     }
 }
 
-type ShaderGetter = dyn Fn(&str) -> Result<DynamicShaderModuleHandle, String>;
-type PipelineConstructor =
+type ShaderGetter = dyn Fn(&str) -> Result<wgpu::ShaderModule, String>;
+type RenderPipelineConstructor =
     dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, String>;
 
-pub struct PipelineHandle {
+pub struct RenderPipeline {
     gpu: Arc<GpuContext>,
-    constructor: Box<PipelineConstructor>,
+    constructor: Box<RenderPipelineConstructor>,
     pipeline: Option<wgpu::RenderPipeline>,
 }
 
-impl PipelineHandle {
+impl RenderPipeline {
     pub fn new<T>(gpu: Arc<GpuContext>, constructor: T) -> Self
     where
         T: Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, String> + 'static,
@@ -180,8 +178,12 @@ impl PipelineHandle {
 
     fn build(&self) -> wgpu::RenderPipeline {
         let gpu = self.gpu.clone();
-        let sg: Box<ShaderGetter> =
-            Box::new(move |shader_name| gpu.shaders.get_shader(shader_name).clone());
+        let sg: Box<ShaderGetter> = Box::new(move |shader_name| {
+            gpu.shaders
+                .get_shader(shader_name)
+                .clone()
+                .map(|s| s.get_module())
+        });
         (self.constructor)(&self.gpu, &sg).unwrap()
     }
 
@@ -213,5 +215,19 @@ macro_rules! register_default {
                 );
             }
         }
+    };
+}
+
+/// Create a PipelineHandle that can build a pipeline using dynamically provided shaders.
+#[macro_export]
+macro_rules! render_pipeline {
+    ($gpu:expr, $($s:ident),+; $desc:expr) => {
+        RenderPipeline::new($gpu.clone(), move |gpu, get_shader| {
+            $(
+                let $s = get_shader(stringify!($s))?;
+            )+
+
+            Ok(gpu.device.create_render_pipeline($desc))
+        })
     };
 }

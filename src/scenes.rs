@@ -4,8 +4,8 @@ use glam::{Mat3, Mat4, Vec3, Vec4};
 use log::info;
 use std::num::NonZero;
 
-use crate::shader::PipelineHandle;
-use crate::{register_default, GpuContext, RenderTarget};
+use crate::shader::RenderPipeline;
+use crate::{register_default, render_pipeline, GpuContext, RenderTarget};
 use std::f32::consts::*;
 use std::sync::Arc;
 
@@ -309,7 +309,7 @@ unsafe impl bytemuck::Zeroable for SceneUniformBuffer {}
 
 pub struct BasicScene3d {
     camera: Camera3d,
-    pipeline: PipelineHandle,
+    pipeline: RenderPipeline,
     scene_geometry: SceneGeometry,
     gpu_scene_geometry: GpuSceneGeometry,
     uniform_buffer: wgpu::Buffer,
@@ -342,6 +342,7 @@ impl BasicScene3d {
         );
 
         register_default!(gpu.shaders, "basic3d", "shader/basic3d.wgsl");
+        register_default!(gpu.shaders, "asdfgh", "shader/basic3d.wgsl");
 
         let device = &gpu.device;
         let bind_group_layout =
@@ -379,53 +380,50 @@ impl BasicScene3d {
             push_constant_ranges: &[],
         });
 
-        let pipeline = PipelineHandle::new(gpu.clone(), move |gpu, get_shader| {
-            let shader = get_shader("basic3d")?;
-
-            Ok(gpu
-                .device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Basic 3D Pipeline"),
-                    layout: Some(&layout),
-                    vertex: wgpu::VertexState {
-                        module: shader.get_module().as_ref(),
-                        entry_point: Some("vs_main"),
-                        buffers: &[wgpu::VertexBufferLayout {
-                            array_stride: size_of::<f32>() as wgpu::BufferAddress * 3,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                        }],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: shader.get_module().as_ref(),
-                        entry_point: Some("fs_main"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: target.format,
-                            blend: Some(wgpu::BlendState::REPLACE),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Cw,
-                        cull_mode: Some(wgpu::Face::Back),
-                        polygon_mode: wgpu::PolygonMode::Fill,
-                        unclipped_depth: false,
-                        conservative: false,
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState {
-                        count: 1,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    multiview: None,
-                    cache: None,
-                }))
-        });
+        let pipeline = render_pipeline!(
+            gpu, basic3d, asdfgh;
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("Basic 3D Pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &basic3d,
+                    entry_point: Some("vs_main"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: size_of::<f32>() as wgpu::BufferAddress * 3,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
+                    }],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &asdfgh,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            }
+        );
 
         Self {
             camera,
