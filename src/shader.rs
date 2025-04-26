@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::GpuContext;
@@ -79,7 +78,7 @@ impl DynamicShaderModule {
 
 #[derive(Clone)]
 pub struct DynamicShaderModuleHandle {
-    dynamic_module: Rc<RefCell<DynamicShaderModule>>,
+    dynamic_module: Arc<RefCell<DynamicShaderModule>>,
 }
 
 impl DynamicShaderModuleHandle {
@@ -123,7 +122,7 @@ impl ShaderManager {
 impl ShaderManager {
     fn add_module(&self, name: String, source: ShaderSource) {
         let handle = DynamicShaderModuleHandle {
-            dynamic_module: Rc::new(RefCell::new(DynamicShaderModule::new(
+            dynamic_module: Arc::new(RefCell::new(DynamicShaderModule::new(
                 name.to_string(),
                 source,
                 self.device.clone(),

@@ -253,13 +253,13 @@ impl GpuSceneGeometry {
         let vertices = gpu.create_buffer_init(
             "aurora_scene_vertices",
             &scene_geometry.vertices,
-            BU::VERTEX | BU::STORAGE,
+            BU::VERTEX | BU::STORAGE | BU::UNIFORM,
         );
 
         let indices = gpu.create_buffer_init(
             "aurora_scene_indices",
             &scene_geometry.indices,
-            BU::INDEX | BU::STORAGE,
+            BU::INDEX | BU::STORAGE | BU::UNIFORM,
         );
 
         let model_start_indices = gpu.create_buffer_init(
@@ -349,29 +349,75 @@ impl BasicScene3d {
             gpu.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("aurora_scene_bg_layout"),
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: NonZero::new(size_of::<SceneUniformBuffer>() as u64),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: NonZero::new(
+                                    size_of::<SceneUniformBuffer>() as u64
+                                ),
+                            },
+                            count: None,
                         },
-                        count: None,
-                    }],
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
                 });
 
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("aurora_scene_bg"),
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer,
-                    offset: 0,
-                    size: NonZero::new(size_of::<SceneUniformBuffer>() as u64),
-                }),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &uniform_buffer,
+                        offset: 0,
+                        size: NonZero::new(size_of::<SceneUniformBuffer>() as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &gpu_scene_geometry.vertices,
+                        offset: 0,
+                        size: NonZero::new(
+                            (size_of::<u32>() * scene_geometry.vertices.len()) as u64,
+                        ),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &gpu_scene_geometry.indices,
+                        offset: 0,
+                        size: NonZero::new(
+                            (size_of::<u32>() * scene_geometry.indices.len()) as u64,
+                        ),
+                    }),
+                },
+            ],
         });
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -388,11 +434,7 @@ impl BasicScene3d {
                 vertex: wgpu::VertexState {
                     module: &basic3d,
                     entry_point: Some("vs_main"),
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: size_of::<f32>() as wgpu::BufferAddress * 3,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                    }],
+                    buffers: &[],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -400,7 +442,7 @@ impl BasicScene3d {
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target.format,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -409,7 +451,7 @@ impl BasicScene3d {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Cw,
-                    cull_mode: Some(wgpu::Face::Back),
+                    cull_mode: None,
                     polygon_mode: wgpu::PolygonMode::Fill,
                     unclipped_depth: false,
                     conservative: false,
@@ -463,10 +505,8 @@ impl Scene for BasicScene3d {
             render_pass.set_pipeline(&self.pipeline.get());
             render_pass.set_bind_group(0, &self.bind_group, &[]);
 
-            let geometry = &self.gpu_scene_geometry;
-            render_pass.set_vertex_buffer(0, geometry.vertices.slice(..));
-            render_pass.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..(self.scene_geometry.indices.len() as u32), 0, 0..1);
+            //let geometry = &self.gpu_scene_geometry;
+            render_pass.draw(0..(self.scene_geometry.indices.len() as u32), 0..1);
         }
 
         ce.finish()
