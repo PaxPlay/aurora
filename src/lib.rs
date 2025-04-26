@@ -2,38 +2,110 @@ pub mod scenes;
 mod shader;
 
 use scenes::Scene;
-use winit::{
-    event::WindowEvent, event_loop::ActiveEventLoop, window::Window
-};
-use wgpu::util::DeviceExt;
-use std::{collections::BTreeMap, default::Default};
 use std::sync::Arc;
+use std::{collections::BTreeMap, default::Default};
+use wgpu::util::DeviceExt;
+use wgpu::Extent3d;
+use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 
-use log::{debug, info, error};
+use log::{debug, error, info};
+
+use clap::Parser;
+
+/// Aurora CLI
+#[derive(Debug, Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(long)]
+    list_formats: bool,
+
+    #[arg(short, long)]
+    format: Option<String>,
+}
 
 /// Central Aurora context
 pub struct Aurora {
     gpu: Arc<GpuContext>,
+    target: Arc<RenderTarget>,
     window: Option<AuroraWindow>,
     scenes: BTreeMap<String, Box<dyn Scene>>,
     current_scene: Option<String>,
 }
 
 impl Aurora {
+    /// Prioritized list of texture formats supported by the framework
+    pub const OUT_FORMATS: [wgpu::TextureFormat; 2] = [
+        wgpu::TextureFormat::Rgba32Float,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ];
+
     pub async fn new() -> Result<Self, ()> {
+        let args = Args::parse();
         let gpu = Arc::new(GpuContext::new().await?);
+
+        let usage = RenderTarget::usage();
+        let formats = Self::list_texture_formats(&gpu, usage);
+        if args.list_formats {
+            println!("Supported texture formats:");
+            for format in formats {
+                println!("- {:?}", format);
+            }
+            std::process::exit(0);
+        }
+
+        let format = Self::select_format(&formats, args.format);
+        let target = Arc::new(RenderTarget::new(&gpu, format));
 
         Ok(Self {
             gpu,
+            target,
             window: None,
             scenes: BTreeMap::new(),
             current_scene: None,
         })
     }
-    
+
+    fn list_texture_formats(
+        gpu: &GpuContext,
+        usage: wgpu::TextureUsages,
+    ) -> Vec<wgpu::TextureFormat> {
+        let formats: Vec<_> = Self::OUT_FORMATS
+            .iter()
+            .filter(|f| {
+                let features = gpu.adapter.get_texture_format_features(**f);
+                features.allowed_usages.contains(usage)
+            })
+            .map(|f| *f)
+            .collect();
+
+        formats
+    }
+
+    fn select_format(
+        supported_formats: &Vec<wgpu::TextureFormat>,
+        selection: Option<String>,
+    ) -> wgpu::TextureFormat {
+        if let Some(selected) = selection {
+            for format in supported_formats {
+                let format_str = format!("{:?}", format);
+                if selected == format_str {
+                    return *format;
+                }
+            }
+
+            error!(target: "aurora", "Selected format {} is not supported", selected);
+        }
+
+        let format = *supported_formats
+            .first()
+            .expect("None of the supported formats are abailable on this platform.");
+        info!(target: "aurora", "Automatically selected format \"{:?}\"", format);
+        format
+    }
+
     pub fn run(&mut self) -> Result<(), winit::error::EventLoopError> {
         info!(target: "aurora", "Running Aurora in windowed mode!");
-        
+
         let event_loop = winit::event_loop::EventLoop::new()?;
         event_loop.run_app(self)?;
         Ok(())
@@ -63,8 +135,13 @@ impl Aurora {
     fn render(&mut self) {
         let gpu = self.gpu.clone();
         let out_surface_texture = self.get_window().surface.get_current_texture().unwrap();
-        let view = out_surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let window_size: [u32; 2] = [self.get_window().surface_config.width, self.get_window().surface_config.height];
+        let view = out_surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let window_size: [u32; 2] = [
+            self.get_window().surface_config.width,
+            self.get_window().surface_config.height,
+        ];
 
         let render_cb = if let Some(mut entry) = self.scenes.first_entry() {
             Some(entry.get_mut().render(self.gpu.clone(), &view))
@@ -73,15 +150,16 @@ impl Aurora {
         };
 
         let ui_context = &mut self.get_window_mut().ui_context;
-        let ui_cb = ui_context.render(&gpu,  &view, window_size);
+        let ui_cb = ui_context.render(&gpu, &view, window_size);
 
         match ui_cb {
-            Some(ui_cb) => { gpu.queue.submit([render_cb.unwrap(), ui_cb]); },
-            None => (),
+            Some(ui_cb) => {
+                gpu.queue.submit([render_cb.unwrap(), ui_cb]);
+            }
+            _ => (),
         }
         out_surface_texture.present();
     }
-
 }
 
 impl winit::application::ApplicationHandler for Aurora {
@@ -90,26 +168,28 @@ impl winit::application::ApplicationHandler for Aurora {
 
         let surface_format = self.get_window().surface_format;
         if let Some(mut entry) = self.scenes.first_entry() {
-            entry.get_mut().build_pipeline(self.gpu.clone(), surface_format);
+            entry
+                .get_mut()
+                .build_pipeline(self.gpu.clone(), surface_format);
         }
     }
 
     fn window_event(
-            &mut self,
-            event_loop: &winit::event_loop::ActiveEventLoop,
-            _window_id: winit::window::WindowId,
-            event: WindowEvent,
-        ) {
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: WindowEvent,
+    ) {
         self.get_window_mut().ui_context.on_window_event(&event);
 
         use winit::event::WindowEvent;
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
-            },
+            }
             WindowEvent::RedrawRequested => {
                 self.render();
-            },
+            }
             WindowEvent::Resized(physical_size) => {
                 {
                     let sc = &mut self.get_window_mut().surface_config;
@@ -118,19 +198,20 @@ impl winit::application::ApplicationHandler for Aurora {
                 }
 
                 let window = self.get_window();
-                window.surface.configure(&self.gpu.device, &window.surface_config);
-            },
+                window
+                    .surface
+                    .configure(&self.gpu.device, &window.surface_config);
+            }
             _ => (),
         }
-        
     }
 }
 
 pub struct GpuContext {
-    instance: wgpu::Instance,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
 }
 
 impl GpuContext {
@@ -147,7 +228,9 @@ impl GpuContext {
         let mut adapters = instance.enumerate_adapters(wgpu::Backends::all());
         adapters.sort_by_key(|a| {
             for (i, b) in ADAPTER_PRIORITIES.iter().enumerate() {
-                if *b == a.get_info().backend { return i as u32; }
+                if *b == a.get_info().backend {
+                    return i as u32;
+                }
             }
             u32::MAX
         });
@@ -157,7 +240,8 @@ impl GpuContext {
             Err(())
         } else {
             let info = adapters[0].get_info();
-            info!(target: "aurora", "Chose WGPU adapter --- Backend: {}, Adapter: {}", info.backend.to_str(), info.name);
+            info!(target: "aurora", "Chose WGPU adapter --- Backend: {}, Adapter: {}",
+                info.backend.to_str(), info.name);
 
             Ok(adapters[0].clone())
         }
@@ -171,15 +255,18 @@ impl GpuContext {
 
         let adapter = Self::select_adapter(&instance)?;
 
-        let (device, queue) = adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
-                ..Default::default()
-            },
-            None
-        ).await.map_err(|_| ())?;
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: None,
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .map_err(|_| ())?;
 
         Ok(Self {
             instance,
@@ -189,12 +276,58 @@ impl GpuContext {
         })
     }
 
-    pub fn create_buffer_init<T : bytemuck::Pod>(&self, label: &str, data: &Vec<T>, usage: wgpu::BufferUsages) -> wgpu::Buffer {
-        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents: bytemuck::cast_slice(data.as_slice()),
-            usage,
-        })
+    pub fn create_buffer_init<T: bytemuck::Pod>(
+        &self,
+        label: &str,
+        data: &Vec<T>,
+        usage: wgpu::BufferUsages,
+    ) -> wgpu::Buffer {
+        self.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(data.as_slice()),
+                usage,
+            })
+    }
+}
+
+pub struct RenderTarget {
+    pub format: wgpu::TextureFormat,
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+}
+
+impl RenderTarget {
+    fn usage() -> wgpu::TextureUsages {
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING
+    }
+
+    fn new(gpu: &GpuContext, format: wgpu::TextureFormat) -> Self {
+        let width: u32 = 1024;
+        let height: u32 = 1024;
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("aurora_target"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: Self::usage(),
+            view_formats: &[format],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            ..Default::default()
+        });
+
+        Self {
+            format,
+            texture,
+            view,
+        }
     }
 }
 
@@ -208,14 +341,21 @@ pub struct AuroraWindow {
 
 impl AuroraWindow {
     fn new(gpu: &GpuContext, event_loop: &ActiveEventLoop) -> Result<Self, ()> {
-        let attributes = winit::window::WindowAttributes::default()
-            .with_title("Aurora");
+        let attributes = winit::window::WindowAttributes::default().with_title("Aurora");
         let window = Arc::new(event_loop.create_window(attributes).map_err(|_| ())?);
 
-        let surface = gpu.instance.create_surface(window.clone()).map_err(|_| ())?;
+        let surface = gpu
+            .instance
+            .create_surface(window.clone())
+            .map_err(|_| ())?;
         let capabilities = surface.get_capabilities(&gpu.adapter);
-        let surface_format = capabilities.formats
-            .iter().copied().filter(|c| c.is_srgb()).next().unwrap_or(capabilities.formats[0]);
+        let surface_format = capabilities
+            .formats
+            .iter()
+            .copied()
+            .filter(|c| c.is_srgb())
+            .next()
+            .unwrap_or(capabilities.formats[0]);
 
         debug!(target: "aurora", "Selected surface format for main window: {:?}", surface_format);
 
@@ -265,32 +405,46 @@ impl UiContext {
     }
 
     pub fn build_ui(ctx: &egui::Context) {
-        egui::Window::new("Aurora Configuration").default_open(true).show(ctx, |ui| {
-            ui.label("Hi there :)");
-            if ui.button("Click Me :)").clicked() {
-                info!(target: "aurora", "Click me button clicked :)");
-            }
-        });
+        egui::Window::new("Aurora Configuration")
+            .default_open(true)
+            .show(ctx, |ui| {
+                ui.label("Hi there :)");
+                if ui.button("Click Me :)").clicked() {
+                    info!(target: "aurora", "Click me button clicked :)");
+                }
+            });
     }
 
-    pub fn render(&mut self, gpu: &GpuContext, view: &wgpu::TextureView, window_size: [u32; 2]) -> Option<wgpu::CommandBuffer> {
-        let mut ce = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    pub fn render(
+        &mut self,
+        gpu: &GpuContext,
+        view: &wgpu::TextureView,
+        window_size: [u32; 2],
+    ) -> Option<wgpu::CommandBuffer> {
+        let mut ce = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let platform_output = {
             let render_pass = ce.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rp_aurora_ui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
             let mut rp_static = render_pass.forget_lifetime();
-            let input = self.state.take_egui_input(&self.window); 
+            let input = self.state.take_egui_input(&self.window);
             let egui_ctx = self.state.egui_ctx();
-            let ui_out = egui_ctx.run(input, |ctx| { Self::build_ui(ctx); });
+            let ui_out = egui_ctx.run(input, |ctx| {
+                Self::build_ui(ctx);
+            });
 
             let clipped_primitives = egui_ctx.tessellate(ui_out.shapes, ui_out.pixels_per_point);
 
@@ -300,15 +454,24 @@ impl UiContext {
             };
 
             for (id, delta) in ui_out.textures_delta.set {
-                self.renderer.update_texture(&gpu.device, &gpu.queue, id, &delta);
+                self.renderer
+                    .update_texture(&gpu.device, &gpu.queue, id, &delta);
             }
 
-            self.renderer.update_buffers(&gpu.device, &gpu.queue, &mut ce, &clipped_primitives, &screen_descriptor);
-            self.renderer.render(&mut rp_static, &clipped_primitives, &screen_descriptor);
+            self.renderer.update_buffers(
+                &gpu.device,
+                &gpu.queue,
+                &mut ce,
+                &clipped_primitives,
+                &screen_descriptor,
+            );
+            self.renderer
+                .render(&mut rp_static, &clipped_primitives, &screen_descriptor);
 
             ui_out.platform_output
         };
-        self.state.handle_platform_output(&self.window, platform_output);
+        self.state
+            .handle_platform_output(&self.window, platform_output);
 
         Some(ce.finish())
     }
@@ -322,4 +485,3 @@ impl UiContext {
         result.consumed
     }
 }
-

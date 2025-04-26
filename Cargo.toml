@@ -26,3 +26,4 @@ egui-winit = "0.31.0"
 env_logger = "0.11.6"
 tobj = "4.0.3"
 bytemuck = "1.22.0"
+clap = { version = "4.5.37", features = ["derive"] }
