@@ -1,16 +1,14 @@
-use std::collections::HashMap;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::fs;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::fs;
 
 use crate::GpuContext;
 
 enum ShaderSource {
     Static(wgpu::ShaderSource<'static>),
-    Dynamic {
-        file: String
-    }
+    Dynamic { file: String },
 }
 
 impl ShaderSource {
@@ -19,23 +17,25 @@ impl ShaderSource {
             ShaderSource::Static(source) => {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(name),
-                    source: source.clone()
+                    source: source.clone(),
                 })
             }
-            ShaderSource::Dynamic { file} => {
-                Self::load_shader_source(name, file.as_str(), device)
-                    .expect(format!("Failed to load the shader file \"{}\".", name).as_str())
-            }
+            ShaderSource::Dynamic { file } => Self::load_shader_source(name, file.as_str(), device)
+                .expect(format!("Failed to load the shader file \"{}\".", name).as_str()),
         }
     }
 
-    fn load_shader_source(name: &str, file: &str, device: &wgpu::Device) -> std::io::Result<wgpu::ShaderModule> {
+    fn load_shader_source(
+        name: &str,
+        file: &str,
+        device: &wgpu::Device,
+    ) -> std::io::Result<wgpu::ShaderModule> {
         let path = file; // maybe concatenate with some subdirectory
         let contents = fs::read_to_string(path)?;
 
         Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(name),
-            source: wgpu::ShaderSource::Wgsl(contents.into())
+            source: wgpu::ShaderSource::Wgsl(contents.into()),
         }))
     }
 }
@@ -44,16 +44,16 @@ struct DynamicShaderModule {
     name: String,
     source: ShaderSource,
     module: Option<Arc<wgpu::ShaderModule>>,
-    gpu: Arc<GpuContext>
+    device: wgpu::Device,
 }
 
 impl DynamicShaderModule {
-    fn new(name: String, source: ShaderSource, gpu: Arc<GpuContext>) -> Self {
+    fn new(name: String, source: ShaderSource, device: wgpu::Device) -> Self {
         Self {
             name,
             source,
             module: None,
-            gpu
+            device,
         }
     }
 
@@ -64,13 +64,14 @@ impl DynamicShaderModule {
 
         match &self.module {
             None => panic!("Shader not available after compilation in get_module"),
-            Some(module) => module.clone()
+            Some(module) => module.clone(),
         }
     }
 
     fn compile_shader(&mut self) {
-        self.module = Some(Arc::new(self.source.build_shader(self.name.as_str(),
-                                                             &self.gpu.device)))
+        self.module = Some(Arc::new(
+            self.source.build_shader(self.name.as_str(), &self.device),
+        ))
     }
 
     fn invalidate(&mut self) {
@@ -85,13 +86,13 @@ pub struct DynamicShaderModuleHandle {
 
 impl DynamicShaderModuleHandle {
     pub fn get_module(&self) -> Arc<wgpu::ShaderModule> {
-        return self.dynamic_module.borrow_mut().get_module()
+        return self.dynamic_module.borrow_mut().get_module();
     }
 
     fn is_dynamic(&self) -> bool {
         match self.dynamic_module.borrow().source {
             ShaderSource::Static(_) => false,
-            ShaderSource::Dynamic { .. } => true
+            ShaderSource::Dynamic { .. } => true,
         }
     }
 
@@ -101,38 +102,39 @@ impl DynamicShaderModuleHandle {
 }
 
 pub struct ShaderManager {
-    shaders: HashMap<String, DynamicShaderModuleHandle>,
-    gpu: Arc<GpuContext>
+    shaders: RefCell<HashMap<String, DynamicShaderModuleHandle>>,
+    device: wgpu::Device,
 }
 
 impl ShaderManager {
-    pub fn new(gpu: Arc<GpuContext>) -> Self {
+    pub fn new(device: wgpu::Device) -> Self {
         Self {
-            shaders: HashMap::new(),
-            gpu
+            shaders: RefCell::new(HashMap::new()),
+            device,
         }
     }
 
-    pub fn get_shader(self, name: &str) -> Result<DynamicShaderModuleHandle, String> {
-        match self.shaders.get(name) {
+    pub fn get_shader(&self, name: &str) -> Result<DynamicShaderModuleHandle, String> {
+        match self.shaders.borrow().get(name) {
             Some(handle) => Ok(handle.clone()),
-            None => {
-                Err(format!("Specified shader \"{}\" does not exist", name).to_string())
-            }
+            None => Err(format!("Specified shader \"{}\" does not exist", name).to_string()),
         }
     }
 }
 
-impl ShaderManager{
-    fn add_module(&mut self, name: String, source: ShaderSource) {
+impl ShaderManager {
+    fn add_module(&self, name: String, source: ShaderSource) {
         let handle = DynamicShaderModuleHandle {
-            dynamic_module: Rc::new(RefCell::new(DynamicShaderModule::new(name.to_string(), source,
-                                                                          self.gpu.clone())))
+            dynamic_module: Rc::new(RefCell::new(DynamicShaderModule::new(
+                name.to_string(),
+                source,
+                self.device.clone(),
+            ))),
         };
 
-        self.shaders.insert(name.to_string(), handle);
+        self.shaders.borrow_mut().insert(name.to_string(), handle);
     }
-    pub fn register_wgsl_static(&mut self, name: &str, source: wgpu::ShaderSource<'static>) {
+    pub fn register_wgsl_static(&self, name: &str, source: wgpu::ShaderSource<'static>) {
         let source = ShaderSource::Static(source);
 
         self.add_module(name.to_string(), source);
@@ -140,7 +142,7 @@ impl ShaderManager{
 }
 
 #[cfg(feature = "dynamic_shaders")]
-impl ShaderManager  {
+impl ShaderManager {
     pub fn register_wgsl(&mut self, name: String, file: String) {
         self.add_module(name, ShaderSource::Dynamic { file });
     }
@@ -154,18 +156,44 @@ impl ShaderManager  {
     }
 }
 
+type ShaderGetter = dyn Fn(&str) -> Result<DynamicShaderModuleHandle, String>;
+type PipelineConstructor =
+    dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, String>;
 
-type ShaderGetter = dyn Fn(String) -> Result<wgpu::ShaderModule, String>;
-type PipelineConstructor = dyn Fn(&ShaderGetter) -> Result<wgpu::RenderPipelineDescriptor, String>;
-struct PipelineHandle {
-    constructor: &'static PipelineConstructor
+pub struct PipelineHandle {
+    gpu: Arc<GpuContext>,
+    constructor: Box<PipelineConstructor>,
+    pipeline: Option<wgpu::RenderPipeline>,
 }
 
 impl PipelineHandle {
-    pub fn new(constructor: &'static PipelineConstructor) -> Self {
+    pub fn new<T>(gpu: Arc<GpuContext>, constructor: T) -> Self
+    where
+        T: Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, String> + 'static,
+    {
         Self {
-            constructor
+            gpu,
+            constructor: Box::new(constructor),
+            pipeline: None,
         }
+    }
+
+    fn build(&self) -> wgpu::RenderPipeline {
+        let gpu = self.gpu.clone();
+        let sg: Box<ShaderGetter> =
+            Box::new(move |shader_name| gpu.shaders.get_shader(shader_name).clone());
+        (self.constructor)(&self.gpu, &sg).unwrap()
+    }
+
+    pub fn get(&mut self) -> wgpu::RenderPipeline {
+        if self.pipeline.is_none() {
+            self.pipeline = Some(self.build());
+        }
+
+        self.pipeline
+            .as_ref()
+            .expect("Pipeline not available???")
+            .clone()
     }
 }
 
@@ -187,4 +215,3 @@ macro_rules! register_default {
         }
     };
 }
-

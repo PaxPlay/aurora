@@ -2,6 +2,7 @@ pub mod scenes;
 mod shader;
 
 use scenes::Scene;
+use shader::ShaderManager;
 use std::sync::Arc;
 use std::{collections::BTreeMap, default::Default};
 use wgpu::util::DeviceExt;
@@ -136,6 +137,10 @@ impl Aurora {
         self.gpu.clone()
     }
 
+    pub fn get_target(&self) -> Arc<RenderTarget> {
+        self.target.clone()
+    }
+
     fn render(&mut self) {
         let gpu = self.gpu.clone();
         let out_surface_texture = self.get_window().surface.get_current_texture().unwrap();
@@ -182,12 +187,6 @@ impl Aurora {
 impl winit::application::ApplicationHandler for Aurora {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         self.window = AuroraWindow::new(&self.gpu, event_loop).ok();
-
-        if let Some(mut entry) = self.scenes.first_entry() {
-            entry
-                .get_mut()
-                .build_pipeline(self.gpu.clone(), self.target.clone());
-        }
     }
 
     fn window_event(
@@ -228,6 +227,7 @@ pub struct GpuContext {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub shaders: ShaderManager,
 }
 
 impl GpuContext {
@@ -284,11 +284,14 @@ impl GpuContext {
             .await
             .map_err(|_| ())?;
 
+        let shaders = ShaderManager::new(device.clone());
+
         Ok(Self {
             instance,
             adapter,
             device,
             queue,
+            shaders,
         })
     }
 
