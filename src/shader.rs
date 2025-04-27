@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::format;
 use std::fs;
 use std::sync::Arc;
 
@@ -174,7 +175,6 @@ impl RenderPipeline {
             pipeline: None,
         }
     }
-
     fn build(&self) -> wgpu::RenderPipeline {
         let gpu = self.gpu.clone();
         let sg: Box<ShaderGetter> = Box::new(move |shader_name| {
@@ -195,6 +195,171 @@ impl RenderPipeline {
             .as_ref()
             .expect("Pipeline not available???")
             .clone()
+    }
+}
+
+#[derive(Clone)]
+struct BindGroupEntry {
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    ty: wgpu::BindingType,
+}
+
+pub struct BindGroupLayoutBuilder {
+    gpu: Arc<GpuContext>,
+    label: Option<String>,
+    bindings: Vec<BindGroupEntry>,
+    layout: Option<wgpu::BindGroupLayout>,
+}
+
+impl BindGroupLayoutBuilder {
+    pub fn new(gpu: Arc<GpuContext>) -> Self {
+        Self {
+            gpu,
+            label: None,
+            bindings: Vec::new(),
+            layout: None,
+        }
+    }
+
+    pub fn add_buffer(
+        mut self,
+        binding: u32,
+        visibility: wgpu::ShaderStages,
+        ty: wgpu::BufferBindingType,
+    ) -> Self {
+        self.bindings.push(BindGroupEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+        });
+
+        self
+    }
+
+    pub fn label(mut self, l: &str) -> Self {
+        self.label = Some(String::from(l));
+        self
+    }
+
+    pub fn build(self) -> BindGroupLayout {
+        let entries: Vec<_> = self
+            .bindings
+            .iter()
+            .map(
+                |BindGroupEntry {
+                     binding,
+                     visibility,
+                     ty,
+                 }| wgpu::BindGroupLayoutEntry {
+                    binding: *binding,
+                    visibility: *visibility,
+                    ty: *ty,
+                    count: None,
+                },
+            )
+            .collect();
+
+        let layout = self
+            .gpu
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: self.label.as_ref().map(|s| s.as_str()),
+                entries: &entries,
+            });
+        BindGroupLayout {
+            gpu: self.gpu,
+            bindings: self.bindings,
+            layout,
+        }
+    }
+}
+
+pub struct BindGroupLayout {
+    gpu: Arc<GpuContext>,
+    bindings: Vec<BindGroupEntry>,
+    layout: wgpu::BindGroupLayout,
+}
+
+impl BindGroupLayout {
+    pub fn bind_group_builder(&self) -> BindGroupBuilder {
+        BindGroupBuilder {
+            gpu: self.gpu.clone(),
+            bindings: self.bindings.clone(),
+            layout: self.layout.clone(),
+            label: None,
+            buffers: Vec::new(),
+        }
+    }
+
+    pub fn get(&self) -> wgpu::BindGroupLayout {
+        self.layout.clone()
+    }
+}
+
+pub struct BindGroupBuilder {
+    gpu: Arc<GpuContext>,
+    bindings: Vec<BindGroupEntry>,
+    layout: wgpu::BindGroupLayout,
+    label: Option<String>,
+    buffers: Vec<(u32, wgpu::Buffer)>,
+}
+
+impl BindGroupBuilder {
+    pub fn label(mut self, l: &str) -> Self {
+        self.label = Some(String::from(l));
+        self
+    }
+
+    pub fn buffer(mut self, binding: u32, b: wgpu::Buffer) -> Self {
+        self.buffers.push((binding, b));
+        self
+    }
+
+    pub fn build(self) -> Result<wgpu::BindGroup, String> {
+        let bindings: Vec<Result<_, String>> = self
+            .bindings
+            .iter()
+            .map(|entry| {
+                Ok(wgpu::BindGroupEntry {
+                    binding: entry.binding,
+                    resource: match entry.ty {
+                        wgpu::BindingType::Buffer { .. } => {
+                            wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &self
+                                    .buffers
+                                    .iter()
+                                    .filter(|(binding, _)| *binding == entry.binding)
+                                    .next()
+                                    .ok_or(format!(
+                                        "Buffer type binding {} was not supplied",
+                                        entry.binding
+                                    ))?
+                                    .1,
+                                offset: 0,
+                                size: None,
+                            })
+                        }
+                        _ => Err(format!("Binding type {:?} not supported", entry.ty))?,
+                    },
+                })
+            })
+            .collect();
+
+        let bindings: Result<Vec<wgpu::BindGroupEntry>, _> = bindings.into_iter().collect();
+
+        Ok(self
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: self.label.as_ref().map(|s| s.as_str()),
+                layout: &self.layout,
+                entries: &bindings?,
+            }))
     }
 }
 

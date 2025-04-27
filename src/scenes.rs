@@ -4,7 +4,7 @@ use glam::{Mat3, Mat4, Vec3, Vec4};
 use log::info;
 use std::num::NonZero;
 
-use crate::shader::RenderPipeline;
+use crate::shader::{BindGroupLayoutBuilder, RenderPipeline};
 use crate::{register_default, render_pipeline, GpuContext, RenderTarget};
 use std::f32::consts::*;
 use std::sync::Arc;
@@ -341,104 +341,47 @@ impl BasicScene3d {
             wgpu::BufferUsages::UNIFORM,
         );
 
-        register_default!(gpu.shaders, "basic3d", "shader/basic3d.wgsl");
-        register_default!(gpu.shaders, "asdfgh", "shader/basic3d.wgsl");
+        register_default!(gpu.shaders, "wireframe", "shader/wireframe.wgsl");
 
         let device = &gpu.device;
-        let bind_group_layout =
-            gpu.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("aurora_scene_bg_layout"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::VERTEX,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: NonZero::new(
-                                    size_of::<SceneUniformBuffer>() as u64
-                                ),
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::VERTEX,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::VERTEX,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
-                });
 
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("aurora_scene_bg"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &uniform_buffer,
-                        offset: 0,
-                        size: NonZero::new(size_of::<SceneUniformBuffer>() as u64),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &gpu_scene_geometry.vertices,
-                        offset: 0,
-                        size: NonZero::new(
-                            (size_of::<u32>() * scene_geometry.vertices.len()) as u64,
-                        ),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &gpu_scene_geometry.indices,
-                        offset: 0,
-                        size: NonZero::new(
-                            (size_of::<u32>() * scene_geometry.indices.len()) as u64,
-                        ),
-                    }),
-                },
-            ],
-        });
+        use wgpu::BufferBindingType as BBT;
+        use wgpu::ShaderStages as SS;
+        let bind_group_layout = BindGroupLayoutBuilder::new(gpu.clone())
+            .label("aurora_scene_bg_layout")
+            .add_buffer(0, SS::VERTEX, BBT::Uniform)
+            .add_buffer(1, SS::VERTEX, BBT::Storage { read_only: true })
+            .add_buffer(2, SS::VERTEX, BBT::Storage { read_only: true })
+            .build();
+
+        let bind_group = bind_group_layout
+            .bind_group_builder()
+            .label("aurora_scene_bg")
+            .buffer(0, uniform_buffer.clone())
+            .buffer(1, gpu_scene_geometry.vertices.clone())
+            .buffer(2, gpu_scene_geometry.indices.clone())
+            .build()
+            .unwrap();
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Basic 3D Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&bind_group_layout.get()],
             push_constant_ranges: &[],
         });
 
         let pipeline = render_pipeline!(
-            gpu, basic3d, asdfgh;
+            gpu, wireframe;
             &wgpu::RenderPipelineDescriptor {
                 label: Some("Basic 3D Pipeline"),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
-                    module: &basic3d,
+                    module: &wireframe,
                     entry_point: Some("vs_main"),
                     buffers: &[],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &asdfgh,
+                    module: &wireframe,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target.format,
