@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fmt::format;
 use std::fs;
 use std::sync::Arc;
 
@@ -209,7 +208,6 @@ pub struct BindGroupLayoutBuilder {
     gpu: Arc<GpuContext>,
     label: Option<String>,
     bindings: Vec<BindGroupEntry>,
-    layout: Option<wgpu::BindGroupLayout>,
 }
 
 impl BindGroupLayoutBuilder {
@@ -218,7 +216,6 @@ impl BindGroupLayoutBuilder {
             gpu,
             label: None,
             bindings: Vec::new(),
-            layout: None,
         }
     }
 

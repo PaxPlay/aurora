@@ -3,6 +3,8 @@ mod shader;
 
 use scenes::Scene;
 use shader::ShaderManager;
+use std::borrow::BorrowMut;
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::{collections::BTreeMap, default::Default};
 use wgpu::util::DeviceExt;
@@ -29,9 +31,11 @@ pub struct Aurora {
     gpu: Arc<GpuContext>,
     target: Arc<RenderTarget>,
     window: Option<AuroraWindow>,
-    scenes: BTreeMap<String, Box<dyn Scene>>,
+    scenes: BTreeMap<String, SceneHandle>,
     current_scene: Option<String>,
 }
+
+type SceneHandle = Arc<RefCell<Box<dyn Scene>>>; // this language might not be real
 
 impl Aurora {
     /// Prioritized list of texture formats supported by the framework
@@ -122,7 +126,8 @@ impl Aurora {
     }
 
     pub fn add_scene(&mut self, name: &str, scene: Box<dyn Scene>) {
-        self.scenes.insert(String::from(name), scene);
+        self.scenes
+            .insert(String::from(name), Arc::new(RefCell::new(scene)));
     }
 
     fn get_window_mut(&mut self) -> &mut AuroraWindow {
@@ -141,6 +146,23 @@ impl Aurora {
         self.target.clone()
     }
 
+    fn get_current_scene(&mut self) -> Option<SceneHandle> {
+        let scene_name = match self.current_scene.as_ref() {
+            Some(name) => Some(name.clone()),
+            None => {
+                if let Some(entry) = self.scenes.first_entry() {
+                    let name = Some(entry.key().clone());
+                    self.current_scene = name.clone();
+                    name
+                } else {
+                    None
+                }
+            }
+        };
+
+        scene_name.map(|name| (self.scenes.get(&name).unwrap()).clone())
+    }
+
     fn render(&mut self) {
         let gpu = self.gpu.clone();
         let out_surface_texture = self.get_window().surface.get_current_texture().unwrap();
@@ -152,14 +174,12 @@ impl Aurora {
             self.get_window().surface_config.height,
         ];
 
-        let render_cb = if let Some(mut entry) = self.scenes.first_entry() {
-            Some(
-                entry
-                    .get_mut()
-                    .render(self.gpu.clone(), self.target.clone()),
-            )
-        } else {
-            None
+        let render_gpu = self.gpu.clone();
+        let render_target = self.target.clone();
+        let scene_handle = self.get_current_scene().unwrap();
+        let render_cb = {
+            let mut scene = scene_handle.try_borrow_mut().unwrap();
+            scene.render(render_gpu, render_target)
         };
 
         let mut ce = gpu
@@ -172,11 +192,11 @@ impl Aurora {
         let copy_cb = ce.finish();
 
         let ui_context = &mut self.get_window_mut().ui_context;
-        let ui_cb = ui_context.render(&gpu, &view, window_size);
+        let ui_cb = ui_context.render(&gpu, &view, window_size, Some(scene_handle));
 
         match ui_cb {
             Some(ui_cb) => {
-                gpu.queue.submit([render_cb.unwrap(), copy_cb, ui_cb]);
+                gpu.queue.submit([render_cb, copy_cb, ui_cb]);
             }
             _ => (),
         }
@@ -353,9 +373,9 @@ impl RenderTarget {
 }
 
 pub struct AuroraWindow {
-    pub window: Arc<Window>,
-    pub surface: wgpu::Surface<'static>,
-    pub surface_format: wgpu::TextureFormat,
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    surface_format: wgpu::TextureFormat,
     surface_config: wgpu::SurfaceConfiguration,
     ui_context: UiContext,
     texture_blitter: wgpu::util::TextureBlitter,
@@ -445,6 +465,7 @@ impl UiContext {
         gpu: &GpuContext,
         view: &wgpu::TextureView,
         window_size: [u32; 2],
+        scene: Option<SceneHandle>,
     ) -> Option<wgpu::CommandBuffer> {
         let mut ce = gpu
             .device
@@ -469,6 +490,15 @@ impl UiContext {
             let egui_ctx = self.state.egui_ctx();
             let ui_out = egui_ctx.run(input, |ctx| {
                 Self::build_ui(ctx);
+
+                if let Some(scene) = scene.clone() {
+                    let mut scene = scene.try_borrow_mut().unwrap();
+                    egui::Window::new("Scene Configuration")
+                        .default_open(true)
+                        .show(ctx, |ui| {
+                            scene.draw_ui(ui);
+                        });
+                }
             });
 
             let clipped_primitives = egui_ctx.tessellate(ui_out.shapes, ui_out.pixels_per_point);
@@ -509,4 +539,8 @@ impl UiContext {
 
         result.consumed
     }
+}
+
+trait DebugUi {
+    fn draw_ui(&mut self, ui: &mut egui::Ui);
 }

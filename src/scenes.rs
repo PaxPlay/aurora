@@ -2,11 +2,12 @@ use glam::{mat3, mat4, vec3, vec4};
 use glam::{Mat3, Mat4, Vec3, Vec4};
 
 use log::info;
-use std::num::NonZero;
 
 use crate::shader::{BindGroupLayoutBuilder, RenderPipeline};
-use crate::{register_default, render_pipeline, GpuContext, RenderTarget};
+use crate::{register_default, render_pipeline, DebugUi, GpuContext, RenderTarget};
 use std::f32::consts::*;
+use std::num::NonZero;
+use std::pin;
 use std::sync::Arc;
 
 pub trait Scene {
@@ -15,10 +16,12 @@ pub trait Scene {
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
     ) -> wgpu::CommandBuffer;
+
+    fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
 }
 
 #[derive(Copy, Clone)]
-struct Angle {
+pub struct Angle {
     pitch: f32,
     yaw: f32,
     roll: f32,
@@ -177,9 +180,282 @@ impl Camera3d {
         }
     }
 
-    fn handle_keyboard_input() {}
+    //fn handle_keyboard_input() {}
 
-    fn handle_mouse_movement() {}
+    //fn handle_mouse_movement() {}
+
+    fn to_centered(&mut self) {
+        match *self {
+            Self::Centered { .. } => (),
+            Self::Perspective {
+                position,
+                angle,
+                fov,
+                near,
+                far,
+                aspect_ratio,
+            } => {
+                let distance = 500.0f32;
+                *self = Self::Centered {
+                    position: position - angle.direction() * distance,
+                    angle,
+                    distance,
+                    fov,
+                    near,
+                    far,
+                    aspect_ratio,
+                }
+            }
+            Self::Orthographic {
+                position,
+                angle,
+                zoom,
+                near,
+                far,
+                aspect_ratio,
+            } => {
+                let distance = 500.0f32;
+                *self = Self::Centered {
+                    position: position - angle.direction() * distance,
+                    angle,
+                    distance,
+                    fov: zoom / 8.0,
+                    near,
+                    far,
+                    aspect_ratio,
+                }
+            }
+        }
+    }
+
+    fn to_perspective(&mut self) {
+        match *self {
+            Self::Centered {
+                position,
+                angle,
+                distance,
+                fov,
+                near,
+                far,
+                aspect_ratio,
+            } => {
+                *self = Self::Perspective {
+                    position: position + angle.direction() * distance,
+                    angle,
+                    fov,
+                    near,
+                    far,
+                    aspect_ratio,
+                }
+            }
+            Self::Perspective { .. } => (),
+            Self::Orthographic {
+                position,
+                angle,
+                zoom,
+                near,
+                far,
+                aspect_ratio,
+            } => {
+                *self = Self::Perspective {
+                    position,
+                    angle,
+                    fov: zoom / 8.0,
+                    near,
+                    far,
+                    aspect_ratio,
+                }
+            }
+        }
+    }
+
+    fn to_orthographic(&mut self) {
+        match *self {
+            Self::Centered {
+                position,
+                angle,
+                distance,
+                fov,
+                near,
+                far,
+                aspect_ratio,
+            } => {
+                *self = Self::Orthographic {
+                    position: position + angle.direction() * distance,
+                    angle,
+                    zoom: fov * 8.0,
+                    near,
+                    far,
+                    aspect_ratio,
+                }
+            }
+            Self::Perspective {
+                position,
+                angle,
+                fov,
+                near,
+                far,
+                aspect_ratio,
+            } => {
+                *self = Self::Orthographic {
+                    position,
+                    angle,
+                    zoom: fov * 8.0,
+                    near,
+                    far,
+                    aspect_ratio,
+                }
+            }
+            Self::Orthographic { .. } => (),
+        }
+    }
+}
+
+impl DebugUi for Camera3d {
+    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+        let current_type = match self {
+            &mut Self::Centered { .. } => 0u32,
+            &mut Self::Perspective { .. } => 1u32,
+            &mut Self::Orthographic { .. } => 2u32,
+        };
+
+        let mut new_type = current_type;
+
+        let value_text = |i: u32| -> &'static str {
+            match i {
+                0 => "Centered",
+                1 => "Perspective",
+                2 => "Orthographic",
+                _ => "Invalid",
+            }
+        };
+
+        egui::ComboBox::from_label("Camera Type")
+            .selected_text(value_text(current_type))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut new_type, 0, value_text(0));
+                ui.selectable_value(&mut new_type, 1, value_text(1));
+                ui.selectable_value(&mut new_type, 2, value_text(2));
+            });
+
+        if current_type != new_type {
+            match new_type {
+                0 => {
+                    self.to_centered();
+                }
+                1 => {
+                    self.to_perspective();
+                }
+                2 => {
+                    self.to_orthographic();
+                }
+                _ => (),
+            }
+        }
+
+        match self {
+            Self::Centered {
+                position,
+                angle,
+                distance,
+                fov,
+                near,
+                far,
+                ..
+            } => {
+                position.draw_ui(ui);
+                angle.draw_ui(ui);
+                ui.horizontal(|ui| {
+                    ui.label("distance");
+                    ui.add(egui::DragValue::new(distance));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("near");
+                    ui.add(egui::DragValue::new(near));
+                    ui.label("far");
+                    ui.add(egui::DragValue::new(far));
+                    ui.label("fov");
+                    ui.add(egui::DragValue::new(fov));
+                });
+            }
+            Self::Perspective {
+                position,
+                angle,
+                fov,
+                near,
+                far,
+                ..
+            } => {
+                position.draw_ui(ui);
+                angle.draw_ui(ui);
+                ui.horizontal(|ui| {
+                    ui.label("near");
+                    ui.add(egui::DragValue::new(near));
+                    ui.label("far");
+                    ui.add(egui::DragValue::new(far));
+                    ui.label("fov");
+                    ui.add(egui::DragValue::new(fov));
+                });
+            }
+            Self::Orthographic {
+                position,
+                angle,
+                zoom,
+                near,
+                far,
+                ..
+            } => {
+                position.draw_ui(ui);
+                angle.draw_ui(ui);
+                ui.horizontal(|ui| {
+                    ui.label("near");
+                    ui.add(egui::DragValue::new(near));
+                    ui.label("far");
+                    ui.add(egui::DragValue::new(far));
+                    ui.label("zoom");
+                    ui.add(egui::DragValue::new(zoom));
+                });
+            }
+        }
+    }
+}
+
+impl DebugUi for Vec3 {
+    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("x");
+            ui.add(egui::DragValue::new(&mut self.x).speed(1.0));
+            ui.label("y");
+            ui.add(egui::DragValue::new(&mut self.y).speed(1.0));
+            ui.label("z");
+            ui.add(egui::DragValue::new(&mut self.z).speed(1.0));
+        });
+    }
+}
+
+impl DebugUi for Angle {
+    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+        let mut pitch = self.pitch.to_degrees();
+        let mut yaw = self.yaw.to_degrees();
+        let mut roll = self.roll.to_degrees();
+
+        ui.horizontal(|ui| {
+            ui.label("pitch");
+            ui.add(
+                egui::DragValue::new(&mut pitch)
+                    .range(-90.0..=90.0)
+                    .speed(1.0),
+            );
+            ui.label("yaw");
+            ui.add(egui::DragValue::new(&mut yaw).range(-180..=180).speed(1.0));
+            ui.label("roll");
+            ui.add(egui::DragValue::new(&mut roll).range(-180..=180).speed(1.0));
+        });
+
+        self.pitch = pitch.to_radians();
+        self.yaw = yaw.to_radians();
+        self.roll = roll.to_radians();
+    }
 }
 
 struct SceneGeometry {
@@ -314,6 +590,7 @@ pub struct BasicScene3d {
     gpu_scene_geometry: GpuSceneGeometry,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    staging_belt: wgpu::util::StagingBelt,
 }
 
 impl BasicScene3d {
@@ -338,7 +615,7 @@ impl BasicScene3d {
         let uniform_buffer = gpu.create_buffer_init(
             "aurora_scene_uniform",
             &vec![ub_contents],
-            wgpu::BufferUsages::UNIFORM,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
         register_default!(gpu.shaders, "wireframe", "shader/wireframe.wgsl");
@@ -410,6 +687,8 @@ impl BasicScene3d {
             }
         );
 
+        let staging_belt = wgpu::util::StagingBelt::new(2048);
+
         Self {
             camera,
             pipeline,
@@ -417,6 +696,7 @@ impl BasicScene3d {
             gpu_scene_geometry,
             uniform_buffer,
             bind_group,
+            staging_belt,
         }
     }
 }
@@ -430,14 +710,33 @@ impl Scene for BasicScene3d {
         let mut ce = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+        self.staging_belt.recall();
         {
+            let mut buffer_view = self.staging_belt.write_buffer(
+                &mut ce,
+                &self.uniform_buffer,
+                0,
+                NonZero::new(size_of::<SceneUniformBuffer>() as u64).unwrap(),
+                &gpu.device,
+            );
+
+            let content: &mut [SceneUniformBuffer] = bytemuck::cast_slice_mut(&mut buffer_view);
+            content[0] = SceneUniformBuffer {
+                mvp: self.camera.view_projection_matrix(),
+            };
+        }
+        self.staging_belt.finish();
+
+        {
+            // render pass
             let mut render_pass = ce.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rp_aurora_scene_3d"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -453,5 +752,9 @@ impl Scene for BasicScene3d {
         }
 
         ce.finish()
+    }
+
+    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+        self.camera.draw_ui(ui);
     }
 }
