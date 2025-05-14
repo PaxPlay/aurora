@@ -1,13 +1,15 @@
+pub mod buffers;
+mod internal;
 pub mod scenes;
-mod shader;
+pub mod shader;
 
+use buffers::{Buffer, BufferCopyUtil};
+use internal::TargetViewPipeline;
 use scenes::Scene;
 use shader::ShaderManager;
-use std::borrow::BorrowMut;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::{collections::BTreeMap, default::Default};
-use wgpu::util::DeviceExt;
 use wgpu::Extent3d;
 use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 
@@ -138,6 +140,15 @@ impl Aurora {
         self.window.as_ref().unwrap()
     }
 
+    fn create_surface_texture(&self) -> (wgpu::SurfaceTexture, wgpu::TextureView) {
+        let window = self.get_window();
+        let texture = window.surface.get_current_texture().unwrap();
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
     pub fn get_gpu(&self) -> Arc<GpuContext> {
         self.gpu.clone()
     }
@@ -165,48 +176,26 @@ impl Aurora {
 
     fn render(&mut self) {
         let gpu = self.gpu.clone();
-        let out_surface_texture = self.get_window().surface.get_current_texture().unwrap();
-        let view = out_surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let window_size: [u32; 2] = [
-            self.get_window().surface_config.width,
-            self.get_window().surface_config.height,
-        ];
 
         let render_gpu = self.gpu.clone();
         let render_target = self.target.clone();
         let scene_handle = self.get_current_scene().unwrap();
-        let render_cb = {
+        let mut command_buffers = {
             let mut scene = scene_handle.try_borrow_mut().unwrap();
             scene.render(render_gpu, render_target)
         };
 
-        let mut ce = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("aurora_ce_copy"),
-            });
-        let blitter = &self.get_window().texture_blitter;
-        blitter.copy(&gpu.device, &mut ce, &self.target.view, &view);
-        let copy_cb = ce.finish();
+        let (surface_texture, view) = self.create_surface_texture();
+        command_buffers.append(&mut self.get_window_mut().render(&view, scene_handle));
 
-        let ui_context = &mut self.get_window_mut().ui_context;
-        let ui_cb = ui_context.render(&gpu, &view, window_size, Some(scene_handle));
-
-        match ui_cb {
-            Some(ui_cb) => {
-                gpu.queue.submit([render_cb, copy_cb, ui_cb]);
-            }
-            _ => (),
-        }
-        out_surface_texture.present();
+        gpu.queue.submit(command_buffers);
+        surface_texture.present();
     }
 }
 
 impl winit::application::ApplicationHandler for Aurora {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.window = AuroraWindow::new(&self.gpu, event_loop).ok();
+        self.window = AuroraWindow::new(self.gpu.clone(), self.target.clone(), event_loop).ok();
     }
 
     fn window_event(
@@ -215,7 +204,9 @@ impl winit::application::ApplicationHandler for Aurora {
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        self.get_window_mut().ui_context.on_window_event(&event);
+        if self.get_window_mut().ui_context.on_window_event(&event) {
+            return;
+        }
 
         use winit::event::WindowEvent;
         match event {
@@ -226,16 +217,13 @@ impl winit::application::ApplicationHandler for Aurora {
                 self.render();
             }
             WindowEvent::Resized(physical_size) => {
-                {
-                    let sc = &mut self.get_window_mut().surface_config;
-                    sc.width = physical_size.width;
-                    sc.height = physical_size.height;
-                }
-
-                let window = self.get_window();
-                window
-                    .surface
-                    .configure(&self.gpu.device, &window.surface_config);
+                let gpu = self.gpu.clone();
+                let target_size = self.target.size;
+                self.get_window_mut().on_resize(
+                    &gpu,
+                    [physical_size.width, physical_size.height],
+                    target_size,
+                );
             }
             _ => (),
         }
@@ -318,15 +306,10 @@ impl GpuContext {
     pub fn create_buffer_init<T: bytemuck::Pod>(
         &self,
         label: &str,
-        data: &Vec<T>,
+        data: &[T],
         usage: wgpu::BufferUsages,
-    ) -> wgpu::Buffer {
-        self.device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(data.as_slice()),
-                usage,
-            })
+    ) -> Buffer<T> {
+        Buffer::new(&self, label, data, usage)
     }
 }
 
@@ -334,6 +317,7 @@ pub struct RenderTarget {
     pub format: wgpu::TextureFormat,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+    pub size: [u32; 2],
 }
 
 impl RenderTarget {
@@ -361,6 +345,8 @@ impl RenderTarget {
             view_formats: &[format],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("aurora_target_view"),
+            dimension: Some(wgpu::TextureViewDimension::D2),
             ..Default::default()
         });
 
@@ -368,21 +354,29 @@ impl RenderTarget {
             format,
             texture,
             view,
+            size: [width, height],
         }
     }
 }
 
 pub struct AuroraWindow {
+    gpu: Arc<GpuContext>,
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
     surface_config: wgpu::SurfaceConfiguration,
     ui_context: UiContext,
-    texture_blitter: wgpu::util::TextureBlitter,
+    target_view_pipeline: TargetViewPipeline,
+    buffer_copy_util: BufferCopyUtil,
+    copy_command: Option<wgpu::CommandBuffer>,
 }
 
 impl AuroraWindow {
-    fn new(gpu: &GpuContext, event_loop: &ActiveEventLoop) -> Result<Self, ()> {
+    fn new(
+        gpu: Arc<GpuContext>,
+        render_target: Arc<RenderTarget>,
+        event_loop: &ActiveEventLoop,
+    ) -> Result<Self, ()> {
         let attributes = winit::window::WindowAttributes::default().with_title("Aurora");
         let window = Arc::new(event_loop.create_window(attributes).map_err(|_| ())?);
 
@@ -413,21 +407,68 @@ impl AuroraWindow {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&gpu.device, &surface_config);
-        let ui_context = UiContext::new(gpu, window.clone(), surface_format);
+        let ui_context = UiContext::new(&gpu, window.clone(), surface_format);
 
-        let texture_blitter = wgpu::util::TextureBlitter::new(&gpu.device, surface_format);
+        let target_view_pipeline = TargetViewPipeline::new(
+            gpu.clone(),
+            render_target,
+            surface_format,
+            [size.width, size.height],
+        );
+        let buffer_copy_util = BufferCopyUtil::new(2048);
 
         Ok(Self {
+            gpu,
             window,
             surface,
             surface_format,
             surface_config,
             ui_context,
-            texture_blitter,
+            target_view_pipeline,
+            buffer_copy_util,
+            copy_command: None,
         })
     }
-}
 
+    fn on_resize(&mut self, gpu: &GpuContext, size: [u32; 2], target_size: [u32; 2]) {
+        self.surface_config.width = size[0];
+        self.surface_config.height = size[1];
+
+        self.surface.configure(&gpu.device, &self.surface_config);
+        let cb = self.buffer_copy_util.create_copy_command(&self.gpu, |ctx| {
+            self.target_view_pipeline
+                .update_size_buffer(ctx, target_size, size);
+        });
+        self.copy_command = Some(cb);
+    }
+
+    fn render(
+        &mut self,
+        view: &wgpu::TextureView,
+        scene_handle: SceneHandle,
+    ) -> Vec<wgpu::CommandBuffer> {
+        let window_size: [u32; 2] = [self.surface_config.width, self.surface_config.height];
+
+        let mut result = Vec::with_capacity(3);
+        if let Some(cb) = self.copy_command.take() {
+            result.push(cb);
+        }
+
+        result.push(
+            self.target_view_pipeline
+                .build_command_buffer(&self.gpu, &view),
+        );
+
+        if let Some(cb) = self
+            .ui_context
+            .render(&self.gpu, &view, window_size, Some(scene_handle))
+        {
+            result.push(cb);
+        }
+
+        result
+    }
+}
 struct UiContext {
     window: Arc<Window>,
     renderer: egui_wgpu::Renderer,
@@ -447,17 +488,6 @@ impl UiContext {
             renderer,
             state,
         }
-    }
-
-    pub fn build_ui(ctx: &egui::Context) {
-        egui::Window::new("Aurora Configuration")
-            .default_open(true)
-            .show(ctx, |ui| {
-                ui.label("Hi there :)");
-                if ui.button("Click Me :)").clicked() {
-                    info!(target: "aurora", "Click me button clicked :)");
-                }
-            });
     }
 
     pub fn render(
@@ -489,8 +519,6 @@ impl UiContext {
             let input = self.state.take_egui_input(&self.window);
             let egui_ctx = self.state.egui_ctx();
             let ui_out = egui_ctx.run(input, |ctx| {
-                Self::build_ui(ctx);
-
                 if let Some(scene) = scene.clone() {
                     let mut scene = scene.try_borrow_mut().unwrap();
                     egui::Window::new("Scene Configuration")
@@ -542,5 +570,5 @@ impl UiContext {
 }
 
 trait DebugUi {
-    fn draw_ui(&mut self, ui: &mut egui::Ui);
+    fn draw_ui(&mut self, ui: &mut egui::Ui) -> bool;
 }

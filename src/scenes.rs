@@ -3,11 +3,13 @@ use glam::{Mat3, Mat4, Vec3, Vec4};
 
 use log::info;
 
+use crate::buffers::{Buffer, BufferCopyContext, BufferCopyUtil};
 use crate::shader::{BindGroupLayoutBuilder, RenderPipeline};
 use crate::{register_default, render_pipeline, DebugUi, GpuContext, RenderTarget};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::f32::consts::*;
 use std::num::NonZero;
-use std::pin;
 use std::sync::Arc;
 
 pub trait Scene {
@@ -15,9 +17,16 @@ pub trait Scene {
         &'a mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
-    ) -> wgpu::CommandBuffer;
+    ) -> Vec<wgpu::CommandBuffer>;
 
     fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
+
+    fn update_target_parameters<'a>(
+        &'a mut self,
+        _gpu: Arc<GpuContext>,
+        _target: Arc<RenderTarget>,
+    ) {
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -120,7 +129,7 @@ pub enum Camera3d {
     },
 }
 
-impl Camera3d {
+impl Default for Camera3d {
     fn default() -> Self {
         Self::Centered {
             position: vec3(0.0f32, 0.0f32, 0.0f32),
@@ -311,12 +320,54 @@ impl Camera3d {
     }
 }
 
-impl DebugUi for Camera3d {
-    fn draw_ui(&mut self, ui: &mut egui::Ui) {
-        let current_type = match self {
-            &mut Self::Centered { .. } => 0u32,
-            &mut Self::Perspective { .. } => 1u32,
-            &mut Self::Orthographic { .. } => 2u32,
+pub struct CameraWithBuffer {
+    pub camera: Camera3d,
+    buffer: Buffer<CameraBuffer>,
+    is_buffer_current: bool,
+}
+
+impl CameraWithBuffer {
+    pub fn new(camera: Camera3d, gpu: Arc<GpuContext>) -> Self {
+        let ub_contents = CameraBuffer::from(&camera);
+
+        let buffer = gpu.create_buffer_init(
+            "aurora_scene_uniform",
+            &[ub_contents],
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
+        Self {
+            camera,
+            buffer,
+            is_buffer_current: true,
+        }
+    }
+
+    fn update_buffer(&mut self, ctx: &mut BufferCopyContext) {
+        self.buffer.write(ctx, &[CameraBuffer::from(&self.camera)]);
+    }
+
+    pub fn update_resolution(&mut self, resolution: [u32; 2]) {
+        let ratio = resolution[1] as f32 / resolution[0] as f32;
+        let ar = match &mut self.camera {
+            Camera3d::Centered { aspect_ratio, .. } => aspect_ratio,
+            Camera3d::Perspective { aspect_ratio, .. } => aspect_ratio,
+            Camera3d::Orthographic { aspect_ratio, .. } => aspect_ratio,
+        };
+        *ar = ratio;
+        self.is_buffer_current = false;
+    }
+}
+
+impl DebugUi for CameraWithBuffer {
+    fn draw_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let camera = &mut self.camera;
+        let mut changed = false;
+
+        let current_type = match camera {
+            &mut Camera3d::Centered { .. } => 0u32,
+            &mut Camera3d::Perspective { .. } => 1u32,
+            &mut Camera3d::Orthographic { .. } => 2u32,
         };
 
         let mut new_type = current_type;
@@ -341,20 +392,21 @@ impl DebugUi for Camera3d {
         if current_type != new_type {
             match new_type {
                 0 => {
-                    self.to_centered();
+                    camera.to_centered();
                 }
                 1 => {
-                    self.to_perspective();
+                    camera.to_perspective();
                 }
                 2 => {
-                    self.to_orthographic();
+                    camera.to_orthographic();
                 }
                 _ => (),
             }
+            changed = true;
         }
 
-        match self {
-            Self::Centered {
+        match camera {
+            Camera3d::Centered {
                 position,
                 angle,
                 distance,
@@ -363,22 +415,22 @@ impl DebugUi for Camera3d {
                 far,
                 ..
             } => {
-                position.draw_ui(ui);
-                angle.draw_ui(ui);
+                changed |= position.draw_ui(ui);
+                changed |= angle.draw_ui(ui);
                 ui.horizontal(|ui| {
                     ui.label("distance");
-                    ui.add(egui::DragValue::new(distance));
+                    changed |= ui.add(egui::DragValue::new(distance)).changed();
                 });
                 ui.horizontal(|ui| {
                     ui.label("near");
-                    ui.add(egui::DragValue::new(near));
+                    changed |= ui.add(egui::DragValue::new(near)).changed();
                     ui.label("far");
-                    ui.add(egui::DragValue::new(far));
+                    changed |= ui.add(egui::DragValue::new(far)).changed();
                     ui.label("fov");
-                    ui.add(egui::DragValue::new(fov));
+                    changed |= ui.add(egui::DragValue::new(fov)).changed();
                 });
             }
-            Self::Perspective {
+            Camera3d::Perspective {
                 position,
                 angle,
                 fov,
@@ -386,18 +438,18 @@ impl DebugUi for Camera3d {
                 far,
                 ..
             } => {
-                position.draw_ui(ui);
-                angle.draw_ui(ui);
+                changed |= position.draw_ui(ui);
+                changed |= angle.draw_ui(ui);
                 ui.horizontal(|ui| {
                     ui.label("near");
-                    ui.add(egui::DragValue::new(near));
+                    changed |= ui.add(egui::DragValue::new(near)).changed();
                     ui.label("far");
-                    ui.add(egui::DragValue::new(far));
+                    changed |= ui.add(egui::DragValue::new(far)).changed();
                     ui.label("fov");
-                    ui.add(egui::DragValue::new(fov));
+                    changed |= ui.add(egui::DragValue::new(fov)).changed();
                 });
             }
-            Self::Orthographic {
+            Camera3d::Orthographic {
                 position,
                 angle,
                 zoom,
@@ -405,67 +457,84 @@ impl DebugUi for Camera3d {
                 far,
                 ..
             } => {
-                position.draw_ui(ui);
-                angle.draw_ui(ui);
+                changed |= position.draw_ui(ui);
+                changed |= angle.draw_ui(ui);
                 ui.horizontal(|ui| {
                     ui.label("near");
-                    ui.add(egui::DragValue::new(near));
+                    changed |= ui.add(egui::DragValue::new(near)).changed();
                     ui.label("far");
-                    ui.add(egui::DragValue::new(far));
+                    changed |= ui.add(egui::DragValue::new(far)).changed();
                     ui.label("zoom");
-                    ui.add(egui::DragValue::new(zoom));
+                    changed |= ui.add(egui::DragValue::new(zoom)).changed();
                 });
             }
         }
+
+        self.is_buffer_current &= !changed;
+
+        changed
     }
 }
 
 impl DebugUi for Vec3 {
-    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+    fn draw_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
         ui.horizontal(|ui| {
             ui.label("x");
-            ui.add(egui::DragValue::new(&mut self.x).speed(1.0));
+            changed |= ui
+                .add(egui::DragValue::new(&mut self.x).speed(1.0))
+                .changed();
             ui.label("y");
-            ui.add(egui::DragValue::new(&mut self.y).speed(1.0));
+            changed |= ui
+                .add(egui::DragValue::new(&mut self.y).speed(1.0))
+                .changed();
             ui.label("z");
-            ui.add(egui::DragValue::new(&mut self.z).speed(1.0));
+            changed |= ui
+                .add(egui::DragValue::new(&mut self.z).speed(1.0))
+                .changed();
         });
+        changed
     }
 }
 
 impl DebugUi for Angle {
-    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+    fn draw_ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+
         let mut pitch = self.pitch.to_degrees();
         let mut yaw = self.yaw.to_degrees();
         let mut roll = self.roll.to_degrees();
 
         ui.horizontal(|ui| {
             ui.label("pitch");
-            ui.add(
-                egui::DragValue::new(&mut pitch)
-                    .range(-90.0..=90.0)
-                    .speed(1.0),
-            );
+            changed |= ui
+                .add(egui::DragValue::new(&mut pitch).range(-90..=90).speed(1.0))
+                .changed();
             ui.label("yaw");
-            ui.add(egui::DragValue::new(&mut yaw).range(-180..=180).speed(1.0));
+            changed |= ui
+                .add(egui::DragValue::new(&mut yaw).range(-180..=180).speed(1.0))
+                .changed();
             ui.label("roll");
-            ui.add(egui::DragValue::new(&mut roll).range(-180..=180).speed(1.0));
+            changed |= ui
+                .add(egui::DragValue::new(&mut roll).range(-180..=180).speed(1.0))
+                .changed();
         });
 
         self.pitch = pitch.to_radians();
         self.yaw = yaw.to_radians();
         self.roll = roll.to_radians();
+        changed
     }
 }
 
-struct SceneGeometry {
-    vertices: Vec<f32>,
-    indices: Vec<u32>,
-    model_start_indices: Vec<u32>,
-    material_indices: Vec<u32>,
-    ambient: Vec<f32>,
-    diffuse: Vec<f32>,
-    specular: Vec<f32>,
+pub struct SceneGeometry {
+    pub vertices: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub model_start_indices: Vec<u32>,
+    pub material_indices: Vec<u32>,
+    pub ambient: Vec<f32>,
+    pub diffuse: Vec<f32>,
+    pub specular: Vec<f32>,
 }
 
 impl SceneGeometry {
@@ -512,14 +581,14 @@ impl SceneGeometry {
     }
 }
 
-struct GpuSceneGeometry {
-    pub vertices: wgpu::Buffer,
-    pub indices: wgpu::Buffer,
-    pub model_start_indices: wgpu::Buffer,
-    pub material_indices: wgpu::Buffer,
-    pub ambient: wgpu::Buffer,
-    pub diffuse: wgpu::Buffer,
-    pub specular: wgpu::Buffer,
+pub struct GpuSceneGeometry {
+    pub vertices: Buffer<f32>,
+    pub indices: Buffer<u32>,
+    pub model_start_indices: Buffer<u32>,
+    pub material_indices: Buffer<u32>,
+    pub ambient: Buffer<f32>,
+    pub diffuse: Buffer<f32>,
+    pub specular: Buffer<f32>,
 }
 
 impl GpuSceneGeometry {
@@ -576,21 +645,47 @@ impl GpuSceneGeometry {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-struct SceneUniformBuffer {
+struct CameraBuffer {
     mvp: Mat4,
+    origin: Vec4,
+    direction: Vec4,
 }
 
-unsafe impl bytemuck::Pod for SceneUniformBuffer {}
-unsafe impl bytemuck::Zeroable for SceneUniformBuffer {}
+impl From<&Camera3d> for CameraBuffer {
+    fn from(value: &Camera3d) -> Self {
+        let (origin, direction) = match value {
+            Camera3d::Centered {
+                position,
+                angle,
+                distance,
+                ..
+            } => (position - distance * angle.direction(), angle.direction()),
+            Camera3d::Perspective {
+                position, angle, ..
+            } => (*position, angle.direction()),
+            Camera3d::Orthographic {
+                position, angle, ..
+            } => (*position, angle.direction()),
+        };
+
+        Self {
+            mvp: value.view_projection_matrix(),
+            origin: origin.extend(0.0f32),
+            direction: direction.extend(0.0f32),
+        }
+    }
+}
+
+unsafe impl bytemuck::Pod for CameraBuffer {}
+unsafe impl bytemuck::Zeroable for CameraBuffer {}
 
 pub struct BasicScene3d {
-    camera: Camera3d,
-    pipeline: RenderPipeline,
-    scene_geometry: SceneGeometry,
-    gpu_scene_geometry: GpuSceneGeometry,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    staging_belt: wgpu::util::StagingBelt,
+    pub camera: CameraWithBuffer,
+    pub scene_geometry: SceneGeometry,
+    pub gpu_scene_geometry: GpuSceneGeometry,
+    pub buffer_copy_util: BufferCopyUtil,
+    views: BTreeMap<String, RefCell<Box<dyn Scene3dView>>>,
+    current_view: String,
 }
 
 impl BasicScene3d {
@@ -603,23 +698,96 @@ impl BasicScene3d {
             fov: 39.3f32,
             near: 500f32,
             far: 2000f32,
-            aspect_ratio: 1.5f32,
+            aspect_ratio: target.size[1] as f32 / target.size[0] as f32,
         };
+        let camera = CameraWithBuffer::new(camera, gpu.clone());
 
         let gpu_scene_geometry = GpuSceneGeometry::from(&scene_geometry, &gpu);
 
-        let ub_contents = SceneUniformBuffer {
-            mvp: camera.view_projection_matrix(),
-        };
-
-        let uniform_buffer = gpu.create_buffer_init(
-            "aurora_scene_uniform",
-            &vec![ub_contents],
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
-
         register_default!(gpu.shaders, "wireframe", "shader/wireframe.wgsl");
 
+        let buffer_copy_util = BufferCopyUtil::new(2048);
+
+        let wireframe: Box<dyn Scene3dView> = Box::new(WireframeView::new(
+            gpu,
+            target,
+            &camera,
+            &gpu_scene_geometry,
+        ));
+        let views = BTreeMap::from([("wireframe".to_string(), RefCell::new(wireframe))]);
+        let current_view = views.first_key_value().unwrap().0.clone();
+
+        Self {
+            camera,
+            scene_geometry,
+            gpu_scene_geometry,
+            buffer_copy_util,
+            views,
+            current_view,
+        }
+    }
+
+    pub fn add_view(&mut self, name: &str, view: Box<dyn Scene3dView>) {
+        self.views.insert(name.to_string(), RefCell::new(view));
+    }
+}
+
+impl Scene for BasicScene3d {
+    fn render<'a>(
+        &'a mut self,
+        gpu: Arc<GpuContext>,
+        target: Arc<RenderTarget>,
+    ) -> Vec<wgpu::CommandBuffer> {
+        let copy_cb = self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
+            self.camera.update_buffer(ctx);
+        });
+
+        let mut view = self
+            .views
+            .get(&self.current_view)
+            .expect("Selected view does not exist.")
+            .borrow_mut();
+        let view_cb = view.render(gpu, target, self);
+
+        vec![copy_cb, view_cb]
+    }
+
+    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Camera", |ui| {
+            self.camera.draw_ui(ui);
+        });
+
+        egui::ComboBox::from_label("View")
+            .selected_text(self.current_view.as_str())
+            .show_ui(ui, |ui| {
+                for (name, _) in self.views.iter() {
+                    ui.selectable_value(&mut self.current_view, name.clone(), name.as_str());
+                }
+            });
+    }
+}
+
+pub trait Scene3dView {
+    fn render<'a>(
+        &'a mut self,
+        gpu: Arc<GpuContext>,
+        target: Arc<RenderTarget>,
+        scene: &BasicScene3d,
+    ) -> wgpu::CommandBuffer;
+}
+
+struct WireframeView {
+    pipeline: RenderPipeline,
+    bind_group: wgpu::BindGroup,
+}
+
+impl WireframeView {
+    fn new(
+        gpu: Arc<GpuContext>,
+        target: Arc<RenderTarget>,
+        camera: &CameraWithBuffer,
+        gpu_scene_geometry: &GpuSceneGeometry,
+    ) -> Self {
         let device = &gpu.device;
 
         use wgpu::BufferBindingType as BBT;
@@ -634,9 +802,9 @@ impl BasicScene3d {
         let bind_group = bind_group_layout
             .bind_group_builder()
             .label("aurora_scene_bg")
-            .buffer(0, uniform_buffer.clone())
-            .buffer(1, gpu_scene_geometry.vertices.clone())
-            .buffer(2, gpu_scene_geometry.indices.clone())
+            .buffer(0, &camera.buffer)
+            .buffer(1, &gpu_scene_geometry.vertices)
+            .buffer(2, &gpu_scene_geometry.indices)
             .build()
             .unwrap();
 
@@ -687,46 +855,23 @@ impl BasicScene3d {
             }
         );
 
-        let staging_belt = wgpu::util::StagingBelt::new(2048);
-
         Self {
-            camera,
             pipeline,
-            scene_geometry,
-            gpu_scene_geometry,
-            uniform_buffer,
             bind_group,
-            staging_belt,
         }
     }
 }
 
-impl Scene for BasicScene3d {
+impl Scene3dView for WireframeView {
     fn render<'a>(
         &'a mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
+        scene: &BasicScene3d,
     ) -> wgpu::CommandBuffer {
         let mut ce = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-
-        self.staging_belt.recall();
-        {
-            let mut buffer_view = self.staging_belt.write_buffer(
-                &mut ce,
-                &self.uniform_buffer,
-                0,
-                NonZero::new(size_of::<SceneUniformBuffer>() as u64).unwrap(),
-                &gpu.device,
-            );
-
-            let content: &mut [SceneUniformBuffer] = bytemuck::cast_slice_mut(&mut buffer_view);
-            content[0] = SceneUniformBuffer {
-                mvp: self.camera.view_projection_matrix(),
-            };
-        }
-        self.staging_belt.finish();
 
         {
             // render pass
@@ -748,13 +893,9 @@ impl Scene for BasicScene3d {
             render_pass.set_bind_group(0, &self.bind_group, &[]);
 
             //let geometry = &self.gpu_scene_geometry;
-            render_pass.draw(0..(self.scene_geometry.indices.len() as u32), 0..1);
+            render_pass.draw(0..(scene.scene_geometry.indices.len() as u32), 0..1);
         }
 
         ce.finish()
-    }
-
-    fn draw_ui(&mut self, ui: &mut egui::Ui) {
-        self.camera.draw_ui(ui);
     }
 }

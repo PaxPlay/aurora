@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 
+use crate::buffers::Buffer;
 use crate::GpuContext;
 
 enum ShaderSource {
@@ -238,6 +239,50 @@ impl BindGroupLayoutBuilder {
         self
     }
 
+    pub fn add_texture(
+        mut self,
+        binding: u32,
+        visibility: wgpu::ShaderStages,
+        sample_type: wgpu::TextureSampleType,
+        view_dimension: wgpu::TextureViewDimension,
+        multisampled: bool,
+    ) -> Self {
+        self.bindings.push(BindGroupEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Texture {
+                sample_type,
+                view_dimension,
+                multisampled,
+            },
+        });
+        self
+    }
+
+    pub fn add_texture_2d(self, binding: u32, visibility: wgpu::ShaderStages) -> Self {
+        self.add_texture(
+            binding,
+            visibility,
+            wgpu::TextureSampleType::Float { filterable: true },
+            wgpu::TextureViewDimension::D2,
+            false,
+        )
+    }
+
+    pub fn add_sampler(
+        mut self,
+        binding: u32,
+        visibility: wgpu::ShaderStages,
+        sampler_binding_type: wgpu::SamplerBindingType,
+    ) -> Self {
+        self.bindings.push(BindGroupEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Sampler(sampler_binding_type),
+        });
+        self
+    }
+
     pub fn label(mut self, l: &str) -> Self {
         self.label = Some(String::from(l));
         self
@@ -290,6 +335,8 @@ impl BindGroupLayout {
             layout: self.layout.clone(),
             label: None,
             buffers: Vec::new(),
+            textures: Vec::new(),
+            samplers: Vec::new(),
         }
     }
 
@@ -304,6 +351,8 @@ pub struct BindGroupBuilder {
     layout: wgpu::BindGroupLayout,
     label: Option<String>,
     buffers: Vec<(u32, wgpu::Buffer)>,
+    textures: Vec<(u32, wgpu::TextureView)>,
+    samplers: Vec<(u32, wgpu::Sampler)>,
 }
 
 impl BindGroupBuilder {
@@ -312,9 +361,33 @@ impl BindGroupBuilder {
         self
     }
 
-    pub fn buffer(mut self, binding: u32, b: wgpu::Buffer) -> Self {
-        self.buffers.push((binding, b));
+    pub fn buffer<T: bytemuck::Pod>(mut self, binding: u32, b: &Buffer<T>) -> Self {
+        self.buffers.push((binding, b.buffer.clone()));
         self
+    }
+
+    pub fn texture(mut self, binding: u32, t: wgpu::TextureView) -> Self {
+        self.textures.push((binding, t));
+        self
+    }
+
+    pub fn sampler(mut self, binding: u32, s: wgpu::Sampler) -> Self {
+        self.samplers.push((binding, s));
+        self
+    }
+
+    #[inline]
+    fn get_binding<T>(binding: u32, v: &Vec<(u32, T)>) -> Result<&T, String> {
+        Ok(&v
+            .iter()
+            .filter(|(b, _)| binding == *b)
+            .next()
+            .ok_or(format!(
+                "Binding of type {} not found for index {}",
+                std::any::type_name::<T>(),
+                binding
+            ))?
+            .1)
     }
 
     pub fn build(self) -> Result<wgpu::BindGroup, String> {
@@ -327,20 +400,17 @@ impl BindGroupBuilder {
                     resource: match entry.ty {
                         wgpu::BindingType::Buffer { .. } => {
                             wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &self
-                                    .buffers
-                                    .iter()
-                                    .filter(|(binding, _)| *binding == entry.binding)
-                                    .next()
-                                    .ok_or(format!(
-                                        "Buffer type binding {} was not supplied",
-                                        entry.binding
-                                    ))?
-                                    .1,
+                                buffer: Self::get_binding(entry.binding, &self.buffers)?,
                                 offset: 0,
                                 size: None,
                             })
                         }
+                        wgpu::BindingType::Sampler(_) => wgpu::BindingResource::Sampler(
+                            Self::get_binding(entry.binding, &self.samplers)?,
+                        ),
+                        wgpu::BindingType::Texture { .. } => wgpu::BindingResource::TextureView(
+                            Self::get_binding(entry.binding, &self.textures)?,
+                        ),
                         _ => Err(format!("Binding type {:?} not supported", entry.ty))?,
                     },
                 })
