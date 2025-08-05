@@ -4,11 +4,17 @@ struct VertexOutput {
     @location(1) bary_coord: vec3<f32>,
 }
 
-struct UniformBuffer {
-    mvp: mat4x4<f32>,
-};
+struct CameraBuffer {
+    vp: mat4x4<f32>,
+    vp_inv: mat4x4<f32>,
+    origin: vec3<f32>,
+    direction: vec3<f32>,
+    up: vec3<f32>,
+    resolution: vec2<u32>,
+    fov: f32,
+}
 
-@group(0) @binding(0) var<uniform> ub: UniformBuffer;
+@group(0) @binding(0) var<uniform> camera: CameraBuffer;
 @group(0) @binding(1) var<storage, read> vertices: array<f32>;
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
 
@@ -23,7 +29,7 @@ fn vs_main(
     bary_coord[index % 3] = 1;
 
     var out: VertexOutput;
-    out.clip_position = ub.mvp * vec4<f32>(pos, 1.0);
+    out.clip_position = camera.vp * vec4<f32>(pos, 1.0);
     out.vert_pos = pos;
     out.bary_coord = bary_coord;
     return out;

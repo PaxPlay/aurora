@@ -1,32 +1,26 @@
-use glam::{mat3, mat4, vec3, vec4};
-use glam::{Mat3, Mat4, Vec3, Vec4};
+use glam::vec3;
+use glam::{Mat4, UVec2, Vec3, Vec4};
 
 use log::info;
 
 use crate::buffers::{Buffer, BufferCopyContext, BufferCopyUtil};
-use crate::shader::{BindGroupLayoutBuilder, RenderPipeline};
+use crate::shader::{BindGroupLayout, BindGroupLayoutBuilder, RenderPipeline};
 use crate::{register_default, render_pipeline, DebugUi, GpuContext, RenderTarget};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::f32::consts::*;
-use std::num::NonZero;
 use std::sync::Arc;
 
 pub trait Scene {
-    fn render<'a>(
-        &'a mut self,
+    fn render(
+        &mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
     ) -> Vec<wgpu::CommandBuffer>;
 
     fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
 
-    fn update_target_parameters<'a>(
-        &'a mut self,
-        _gpu: Arc<GpuContext>,
-        _target: Arc<RenderTarget>,
-    ) {
-    }
+    fn update_target_parameters(&mut self, _gpu: Arc<GpuContext>, _target: Arc<RenderTarget>) {}
 }
 
 #[derive(Copy, Clone)]
@@ -322,13 +316,15 @@ impl Camera3d {
 
 pub struct CameraWithBuffer {
     pub camera: Camera3d,
-    buffer: Buffer<CameraBuffer>,
+    pub resolution: [u32; 2],
+    pub buffer: Buffer<CameraBuffer>,
     is_buffer_current: bool,
 }
 
 impl CameraWithBuffer {
     pub fn new(camera: Camera3d, gpu: Arc<GpuContext>) -> Self {
-        let ub_contents = CameraBuffer::from(&camera);
+        let resolution = [1024, 1024];
+        let ub_contents = CameraBuffer::new(&camera, resolution);
 
         let buffer = gpu.create_buffer_init(
             "aurora_scene_uniform",
@@ -338,17 +334,20 @@ impl CameraWithBuffer {
 
         Self {
             camera,
+            resolution,
             buffer,
             is_buffer_current: true,
         }
     }
 
     fn update_buffer(&mut self, ctx: &mut BufferCopyContext) {
-        self.buffer.write(ctx, &[CameraBuffer::from(&self.camera)]);
+        self.buffer
+            .write(ctx, &[CameraBuffer::new(&self.camera, self.resolution)]);
     }
 
     pub fn update_resolution(&mut self, resolution: [u32; 2]) {
         let ratio = resolution[1] as f32 / resolution[0] as f32;
+        self.resolution = resolution;
         let ar = match &mut self.camera {
             Camera3d::Centered { aspect_ratio, .. } => aspect_ratio,
             Camera3d::Perspective { aspect_ratio, .. } => aspect_ratio,
@@ -539,6 +538,7 @@ pub struct SceneGeometry {
 
 impl SceneGeometry {
     pub fn new(file: &str) -> Self {
+        info!(target: "aurora", "Loading scene geometry from file \"{file}\"");
         let (models, materials) = tobj::load_obj(file, &tobj::GPU_LOAD_OPTIONS)
             .expect(format!("Unable to load obj file for {}", file).as_str());
         let materials = materials.unwrap();
@@ -553,11 +553,13 @@ impl SceneGeometry {
             let start_index = indices.len() as u32;
             let start_vertex = vertices.len() as u32 / 3;
             model_start_indices.push(start_index);
-            material_indices.push(model.mesh.material_id.unwrap_or(0) as u32);
             vertices.extend(model.mesh.positions);
             indices.extend(model.mesh.indices.iter().map(|i| i + start_vertex));
+
+            let material = model.mesh.material_id.unwrap_or(0) as u32;
+            material_indices.extend(std::iter::repeat_n(material, model.mesh.indices.len() / 3));
         }
-        info!(target: "aurora", "Total Vertices: {}, Total triangles: {}", vertices.len(), indices.len() / 3);
+        info!(target: "aurora", "Total vertices: {}, Total triangles: {}, Total materials {}", vertices.len(), indices.len() / 3, materials.len());
 
         let mut ambient = Vec::new();
         let mut diffuse = Vec::new();
@@ -589,10 +591,13 @@ pub struct GpuSceneGeometry {
     pub ambient: Buffer<f32>,
     pub diffuse: Buffer<f32>,
     pub specular: Buffer<f32>,
+    pub sizes: Buffer<u32>,
+    pub bind_group_layout: BindGroupLayout,
+    pub bind_group: wgpu::BindGroup,
 }
 
 impl GpuSceneGeometry {
-    pub fn from(scene_geometry: &SceneGeometry, gpu: &GpuContext) -> Self {
+    pub fn from(scene_geometry: &SceneGeometry, gpu: Arc<GpuContext>) -> Self {
         use wgpu::BufferUsages as BU;
 
         let vertices = gpu.create_buffer_init(
@@ -610,26 +615,101 @@ impl GpuSceneGeometry {
         let model_start_indices = gpu.create_buffer_init(
             "aurora_scene_model_start_indices",
             &scene_geometry.model_start_indices,
-            BU::STORAGE,
+            BU::STORAGE | BU::UNIFORM,
         );
 
         let material_indices = gpu.create_buffer_init(
             "aurora_scene_material_indices",
             &scene_geometry.material_indices,
-            BU::STORAGE,
+            BU::STORAGE | BU::UNIFORM,
         );
 
-        let ambient =
-            gpu.create_buffer_init("aurora_scene_ambient", &scene_geometry.ambient, BU::STORAGE);
+        let ambient = gpu.create_buffer_init(
+            "aurora_scene_ambient",
+            &scene_geometry.ambient,
+            BU::STORAGE | BU::UNIFORM,
+        );
 
-        let diffuse =
-            gpu.create_buffer_init("aurora_scene_diffuse", &scene_geometry.diffuse, BU::STORAGE);
+        let diffuse = gpu.create_buffer_init(
+            "aurora_scene_diffuse",
+            &scene_geometry.diffuse,
+            BU::STORAGE | BU::UNIFORM,
+        );
 
         let specular = gpu.create_buffer_init(
             "aurora_scene_specular",
             &scene_geometry.specular,
-            BU::STORAGE,
+            BU::STORAGE | BU::UNIFORM,
         );
+
+        let sizes: [u32; 7] = [
+            scene_geometry.vertices.len() as u32,
+            scene_geometry.indices.len() as u32,
+            scene_geometry.model_start_indices.len() as u32,
+            scene_geometry.material_indices.len() as u32,
+            scene_geometry.ambient.len() as u32,
+            scene_geometry.diffuse.len() as u32,
+            scene_geometry.specular.len() as u32,
+        ];
+        let sizes = gpu.create_buffer_init("aurora_scene_sizes", &sizes, BU::STORAGE | BU::UNIFORM);
+
+        let bind_group_layout = BindGroupLayoutBuilder::new(gpu)
+            .label("bgl_scene_geometry")
+            .add_buffer(
+                0, // vertices
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                1, // indices
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                2, // model_start_indices
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                3, // material_indices
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                4, // ambient
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                5, // diffuse
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                6, // specular
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                7, // sizes
+                wgpu::ShaderStages::all(),
+                wgpu::BufferBindingType::Uniform,
+            )
+            .build();
+
+        let bind_group = bind_group_layout
+            .bind_group_builder()
+            .label("bg_scene_geometry")
+            .buffer(0, &vertices)
+            .buffer(1, &indices)
+            .buffer(2, &model_start_indices)
+            .buffer(3, &material_indices)
+            .buffer(4, &ambient)
+            .buffer(5, &diffuse)
+            .buffer(6, &specular)
+            .buffer(7, &sizes)
+            .build()
+            .expect("Failed creating scene geometry bind group");
 
         Self {
             vertices,
@@ -639,39 +719,57 @@ impl GpuSceneGeometry {
             ambient,
             diffuse,
             specular,
+            sizes,
+            bind_group_layout,
+            bind_group,
         }
     }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-struct CameraBuffer {
-    mvp: Mat4,
+pub struct CameraBuffer {
+    vp: Mat4,
+    vp_inv: Mat4,
     origin: Vec4,
     direction: Vec4,
+    up: Vec4,
+    resolution: UVec2,
+    fov: f32,
 }
 
-impl From<&Camera3d> for CameraBuffer {
-    fn from(value: &Camera3d) -> Self {
-        let (origin, direction) = match value {
+impl CameraBuffer {
+    fn new(value: &Camera3d, resolution: [u32; 2]) -> Self {
+        let (origin, angle, fov) = match value {
             Camera3d::Centered {
                 position,
                 angle,
                 distance,
+                fov,
                 ..
-            } => (position - distance * angle.direction(), angle.direction()),
+            } => (position - distance * angle.direction(), angle, *fov),
             Camera3d::Perspective {
-                position, angle, ..
-            } => (*position, angle.direction()),
+                position,
+                angle,
+                fov,
+                ..
+            } => (*position, angle, *fov),
             Camera3d::Orthographic {
                 position, angle, ..
-            } => (*position, angle.direction()),
+            } => (*position, angle, 60.0f32),
         };
 
+        let vp = value.view_projection_matrix();
+        let vp_inv = vp.inverse();
+
         Self {
-            mvp: value.view_projection_matrix(),
+            vp,
+            vp_inv,
             origin: origin.extend(0.0f32),
-            direction: direction.extend(0.0f32),
+            direction: angle.direction().extend(0.0f32),
+            up: angle.up().extend(0.0f32),
+            resolution: UVec2::from_array(resolution),
+            fov,
         }
     }
 }
@@ -702,7 +800,7 @@ impl BasicScene3d {
         };
         let camera = CameraWithBuffer::new(camera, gpu.clone());
 
-        let gpu_scene_geometry = GpuSceneGeometry::from(&scene_geometry, &gpu);
+        let gpu_scene_geometry = GpuSceneGeometry::from(&scene_geometry, gpu.clone());
 
         register_default!(gpu.shaders, "wireframe", "shader/wireframe.wgsl");
 
@@ -729,12 +827,13 @@ impl BasicScene3d {
 
     pub fn add_view(&mut self, name: &str, view: Box<dyn Scene3dView>) {
         self.views.insert(name.to_string(), RefCell::new(view));
+        self.current_view = name.to_string();
     }
 }
 
 impl Scene for BasicScene3d {
-    fn render<'a>(
-        &'a mut self,
+    fn render(
+        &mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
     ) -> Vec<wgpu::CommandBuffer> {
@@ -768,8 +867,8 @@ impl Scene for BasicScene3d {
 }
 
 pub trait Scene3dView {
-    fn render<'a>(
-        &'a mut self,
+    fn render(
+        &mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
         scene: &BasicScene3d,
@@ -863,8 +962,8 @@ impl WireframeView {
 }
 
 impl Scene3dView for WireframeView {
-    fn render<'a>(
-        &'a mut self,
+    fn render(
+        &mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
         scene: &BasicScene3d,

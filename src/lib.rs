@@ -86,7 +86,7 @@ impl Aurora {
 
                 features.allowed_usages.contains(usage) && features.flags.contains(FEATURES)
             })
-            .map(|f| *f)
+            .copied()
             .collect();
 
         formats
@@ -283,7 +283,7 @@ impl GpuContext {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: wgpu::Features::empty(),
+                    required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                     required_limits: wgpu::Limits::default(),
                     ..Default::default()
                 },
@@ -309,7 +309,16 @@ impl GpuContext {
         data: &[T],
         usage: wgpu::BufferUsages,
     ) -> Buffer<T> {
-        Buffer::new(&self, label, data, usage)
+        Buffer::from_data(self, label, data, usage)
+    }
+
+    pub fn create_buffer<T: bytemuck::Pod>(
+        &self,
+        label: &str,
+        size: usize,
+        usage: wgpu::BufferUsages,
+    ) -> Buffer<T> {
+        Buffer::new(self, label, size, usage)
     }
 }
 
@@ -456,12 +465,12 @@ impl AuroraWindow {
 
         result.push(
             self.target_view_pipeline
-                .build_command_buffer(&self.gpu, &view),
+                .build_command_buffer(&self.gpu, view),
         );
 
         if let Some(cb) = self
             .ui_context
-            .render(&self.gpu, &view, window_size, Some(scene_handle))
+            .render(&self.gpu, view, window_size, Some(scene_handle))
         {
             result.push(cb);
         }
@@ -571,4 +580,12 @@ impl UiContext {
 
 trait DebugUi {
     fn draw_ui(&mut self, ui: &mut egui::Ui) -> bool;
+}
+
+pub fn dispatch_size(total_threads: (u32, u32, u32), wg_size: (u32, u32, u32)) -> (u32, u32, u32) {
+    (
+        total_threads.0.div_ceil(wg_size.0),
+        total_threads.1.div_ceil(wg_size.1),
+        total_threads.2.div_ceil(wg_size.2),
+    )
 }

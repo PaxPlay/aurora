@@ -17,7 +17,7 @@ cfg-if = "1"
 winit = "0.30.9"
 log  = "0.4.27"
 wgpu = "24.0.3"
-glam = "0.30.2"
+glam = { version = "0.30.2", features = ["glam-assert"] }
 eframe = "0.31.1"
 egui = "0.31.1"
 egui-wgpu = "0.31.1"

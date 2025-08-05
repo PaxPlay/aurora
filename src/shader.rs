@@ -157,6 +157,8 @@ impl ShaderManager {
 type ShaderGetter = dyn Fn(&str) -> Result<wgpu::ShaderModule, String>;
 type RenderPipelineConstructor =
     dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, String>;
+type ComputePipelineConstructor =
+    dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::ComputePipeline, String>;
 
 pub struct RenderPipeline {
     gpu: Arc<GpuContext>,
@@ -187,6 +189,46 @@ impl RenderPipeline {
     }
 
     pub fn get(&mut self) -> wgpu::RenderPipeline {
+        if self.pipeline.is_none() {
+            self.pipeline = Some(self.build());
+        }
+
+        self.pipeline
+            .as_ref()
+            .expect("Pipeline not available???")
+            .clone()
+    }
+}
+
+pub struct ComputePipeline {
+    gpu: Arc<GpuContext>,
+    constructor: Box<ComputePipelineConstructor>,
+    pipeline: Option<wgpu::ComputePipeline>,
+}
+
+impl ComputePipeline {
+    pub fn new<T>(gpu: Arc<GpuContext>, constructor: T) -> Self
+    where
+        T: Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::ComputePipeline, String> + 'static,
+    {
+        Self {
+            gpu,
+            constructor: Box::new(constructor),
+            pipeline: None,
+        }
+    }
+    fn build(&self) -> wgpu::ComputePipeline {
+        let gpu = self.gpu.clone();
+        let sg: Box<ShaderGetter> = Box::new(move |shader_name| {
+            gpu.shaders
+                .get_shader(shader_name)
+                .clone()
+                .map(|s| s.get_module())
+        });
+        (self.constructor)(&self.gpu, &sg).unwrap()
+    }
+
+    pub fn get(&mut self) -> wgpu::ComputePipeline {
         if self.pipeline.is_none() {
             self.pipeline = Some(self.build());
         }
@@ -279,6 +321,26 @@ impl BindGroupLayoutBuilder {
             binding,
             visibility,
             ty: wgpu::BindingType::Sampler(sampler_binding_type),
+        });
+        self
+    }
+
+    pub fn add_storage_texture(
+        mut self,
+        binding: u32,
+        visibility: wgpu::ShaderStages,
+        access: wgpu::StorageTextureAccess,
+        format: wgpu::TextureFormat,
+        view_dimension: wgpu::TextureViewDimension,
+    ) -> Self {
+        self.bindings.push(BindGroupEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::StorageTexture {
+                access,
+                format,
+                view_dimension,
+            },
         });
         self
     }
@@ -377,11 +439,10 @@ impl BindGroupBuilder {
     }
 
     #[inline]
-    fn get_binding<T>(binding: u32, v: &Vec<(u32, T)>) -> Result<&T, String> {
+    fn get_binding<T>(binding: u32, v: &[(u32, T)]) -> Result<&T, String> {
         Ok(&v
             .iter()
-            .filter(|(b, _)| binding == *b)
-            .next()
+            .find(|(b, _)| binding == *b)
             .ok_or(format!(
                 "Binding of type {} not found for index {}",
                 std::any::type_name::<T>(),
@@ -411,7 +472,10 @@ impl BindGroupBuilder {
                         wgpu::BindingType::Texture { .. } => wgpu::BindingResource::TextureView(
                             Self::get_binding(entry.binding, &self.textures)?,
                         ),
-                        _ => Err(format!("Binding type {:?} not supported", entry.ty))?,
+                        wgpu::BindingType::StorageTexture { .. } => wgpu::BindingResource::TextureView(
+                            Self::get_binding(entry.binding, &self.textures)?,
+                        ),
+                        _ => Err(format!("Aurora: Binding type {:?} not supported", entry.ty))?,
                     },
                 })
             })
@@ -423,7 +487,8 @@ impl BindGroupBuilder {
             .gpu
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: self.label.as_ref().map(|s| s.as_str()),
+
+                label: self.label.as_deref(),
                 layout: &self.layout,
                 entries: &bindings?,
             }))
@@ -459,6 +524,20 @@ macro_rules! render_pipeline {
             )+
 
             Ok(gpu.device.create_render_pipeline($desc))
+        })
+    };
+}
+
+/// Create a PipelineHandle that can build a pipeline using dynamically provided shaders.
+#[macro_export]
+macro_rules! compute_pipeline {
+    ($gpu:expr, $($s:ident),+; $desc:expr) => {
+        ComputePipeline::new($gpu.clone(), move |gpu, get_shader| {
+            $(
+                let $s = get_shader(stringify!($s))?;
+            )+
+
+            Ok(gpu.device.create_compute_pipeline($desc))
         })
     };
 }

@@ -155,7 +155,7 @@ impl TargetViewPipeline {
             let mut render_pass = ce.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("aurora_rp_target_view"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target_view,
+                    view: target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),

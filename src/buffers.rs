@@ -9,7 +9,7 @@ pub struct Buffer<T: bytemuck::Pod> {
 }
 
 impl<T: bytemuck::Pod> Buffer<T> {
-    pub fn new(gpu: &GpuContext, label: &str, data: &[T], usage: wgpu::BufferUsages) -> Self {
+    pub fn from_data(gpu: &GpuContext, label: &str, data: &[T], usage: wgpu::BufferUsages) -> Self {
         let buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -24,12 +24,26 @@ impl<T: bytemuck::Pod> Buffer<T> {
         }
     }
 
+    pub fn new(gpu: &GpuContext, label: &str, size: usize, usage: wgpu::BufferUsages) -> Self {
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: size as u64,
+            usage,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            buffer,
+            phantom: PhantomData,
+        }
+    }
+
     pub fn write(&self, ctx: &mut BufferCopyContext, data: &[T]) {
         let mut buffer_view = ctx.staging_belt.write_buffer(
             &mut ctx.command_encoder,
             &self.buffer,
             0,
-            NonZero::new((size_of::<T>() * data.len()) as u64).unwrap(),
+            NonZero::new(size_of_val(data) as u64).unwrap(),
             ctx.device,
         );
 
@@ -55,7 +69,7 @@ impl BufferCopyUtil {
         mut copy_commands: F,
     ) -> wgpu::CommandBuffer
     where
-        F: FnMut(&mut BufferCopyContext) -> (),
+        F: FnMut(&mut BufferCopyContext),
     {
         self.staging_belt.recall();
         let command_encoder = gpu
@@ -78,7 +92,7 @@ pub struct BufferCopyContext<'a> {
     staging_belt: &'a mut wgpu::util::StagingBelt,
 }
 
-impl<'a> BufferCopyContext<'a> {
+impl BufferCopyContext<'_> {
     fn finish(self) -> wgpu::CommandBuffer {
         self.staging_belt.finish();
         self.command_encoder.finish()
