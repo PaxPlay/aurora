@@ -22,6 +22,8 @@ struct Ray {
 
 struct RayIntersectionData {
     pos: vec3<f32>,
+    n: vec3<f32>,
+    w_i: vec3<f32>,
     t: f32,
     surface_id: u32,
     primary_ray: u32,
@@ -218,6 +220,8 @@ fn intersect_rays(
             isec.t = t;
             isec.pos = ray.origin + t * ray.direction;
             isec.surface_id = i;
+            isec.n = normalize(cross(e1, e2));
+            isec.w_i = -ray.direction;
         }
     }
 
@@ -267,8 +271,9 @@ fn handle_intersections(
             diffuse[3 * mat_idx + 2],
         );
         let primary = primary_rays[isec.primary_ray];
+        let color = diff * pow(dot(isec.w_i, isec.n), 3.0);
 
-        primary_rays[isec.primary_ray].result_color = vec4(diff, 1.0f);
+        primary_rays[isec.primary_ray].result_color = vec4(color, 1.0f);
     }
 }
 

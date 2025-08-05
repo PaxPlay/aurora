@@ -57,7 +57,7 @@ impl PathTracerView {
 
         let ray_intersection_buffer: Buffer<f32> = gpu.create_buffer(
             "ray_intersections",
-            32 * total_pixels,
+            64 * total_pixels,
             wgpu::BufferUsages::STORAGE,
         );
 
