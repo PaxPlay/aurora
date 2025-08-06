@@ -1,30 +1,35 @@
 use aurora::{
     buffers::Buffer,
     compute_pipeline, dispatch_size, register_default,
-    scenes::{BasicScene3d, Scene3dView},
+    scenes::{BasicScene3d, Scene3dView, SceneGeometry},
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
     Aurora, GpuContext,
 };
 use rand::Rng;
 use std::sync::Arc;
 
-fn main() -> std::process::ExitCode {
-    env_logger::init();
+fn main() {
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "wasm32")] {
+            console_log::init_with_level(log::Level::Debug).unwrap();
+            wasm_bindgen_futures::spawn_local(main_async());
+        } else {
+            env_logger::init();
+            pollster::block_on(main_async());
+        }
+    }
+}
 
-    let mut aurora = pollster::block_on(Aurora::new()).unwrap();
-
-    let mut scene = BasicScene3d::new(
-        "models/cornell_box.obj",
-        aurora.get_gpu(),
-        aurora.get_target(),
-    );
+async fn main_async() {
+    let mut aurora = Aurora::new().await.unwrap();
+    let scene_geometry = SceneGeometry::new("cornell_box.obj").await;
+    let mut scene = BasicScene3d::new(scene_geometry, aurora.get_gpu(), aurora.get_target());
     scene.add_view(
         "path_tracer",
         Box::new(PathTracerView::new(aurora.get_gpu(), &scene)),
     );
     aurora.add_scene("basic_3d", Box::new(scene));
     aurora.run().unwrap();
-    std::process::ExitCode::SUCCESS
 }
 
 struct PathTracerView {
@@ -131,6 +136,7 @@ impl PathTracerView {
             .unwrap();
 
         let bgl_image = BindGroupLayoutBuilder::new(gpu.clone())
+            .label("bgl_image")
             .add_storage_texture(
                 0,
                 wgpu::ShaderStages::COMPUTE,
@@ -153,8 +159,8 @@ impl PathTracerView {
                 push_constant_ranges: &[],
             });
 
-        register_default!(gpu.shaders, "path_tracer", "shader/pathtracer.wgsl");
-        register_default!(gpu.shaders, "intersect", "shader/intersect.wgsl");
+        register_default!(gpu.shaders, "path_tracer", "../shader/pathtracer.wgsl");
+        register_default!(gpu.shaders, "intersect", "../shader/intersect.wgsl");
 
         let pl = pipeline_layout.clone();
         let schedule_pipeline = compute_pipeline!(gpu, path_tracer; &wgpu::ComputePipelineDescriptor {

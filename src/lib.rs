@@ -3,6 +3,13 @@ mod internal;
 pub mod scenes;
 pub mod shader;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
+extern crate console_error_panic_hook;
+#[cfg(target_arch = "wasm32")]
+use std::panic;
+
 use buffers::{Buffer, BufferCopyUtil};
 use internal::TargetViewPipeline;
 use scenes::Scene;
@@ -10,6 +17,7 @@ use shader::ShaderManager;
 use std::cell::RefCell;
 use std::sync::Arc;
 use std::{collections::BTreeMap, default::Default};
+use thiserror::Error;
 use wgpu::Extent3d;
 #[cfg(target_os = "linux")]
 use winit::platform::x11::EventLoopBuilderExtX11;
@@ -46,6 +54,12 @@ pub struct Aurora {
 
 type SceneHandle = Arc<RefCell<Box<dyn Scene>>>; // this language might not be real
 
+#[derive(Error, Debug)]
+pub enum NewAuroraError {
+    #[error("failed creating gpu context")]
+    NewGpuContextError(#[from] NewGpuContextError),
+}
+
 impl Aurora {
     /// Prioritized list of texture formats supported by the framework
     pub const OUT_FORMATS: [wgpu::TextureFormat; 3] = [
@@ -54,7 +68,10 @@ impl Aurora {
         wgpu::TextureFormat::Rgba32Float,
     ];
 
-    pub async fn new() -> Result<Self, ()> {
+    pub async fn new() -> Result<Self, NewAuroraError> {
+        #[cfg(target_arch = "wasm32")]
+        panic::set_hook(Box::new(console_error_panic_hook::hook));
+
         let args = Args::parse();
         let gpu = Arc::new(GpuContext::new().await?);
 
@@ -66,6 +83,11 @@ impl Aurora {
                 println!("- {format:?}");
             }
             std::process::exit(0);
+        }
+
+        info!("Supported texture formats:");
+        for format in &formats {
+            info!("- {format:?}");
         }
 
         let format = Self::select_format(&formats, args.format.clone());
@@ -254,8 +276,22 @@ pub struct GpuContext {
     pub shaders: ShaderManager,
 }
 
+#[derive(Error, Debug)]
+pub enum NewGpuContextError {
+    #[error("no suitable adapter found")]
+    NoAdapterFound,
+
+    #[error("failed requesting device")]
+    RequestDeviceError(#[from] wgpu::RequestDeviceError),
+
+    #[cfg(target_arch = "wasm32")]
+    #[error("failed creating adapter")]
+    RequestAdapterError,
+}
+
 impl GpuContext {
-    fn select_adapter(instance: &wgpu::Instance) -> Result<wgpu::Adapter, ()> {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn select_adapter(instance: &wgpu::Instance) -> Result<wgpu::Adapter, NewGpuContextError> {
         const ADAPTER_PRIORITIES: [wgpu::Backend; 6] = [
             wgpu::Backend::Vulkan,
             wgpu::Backend::Metal,
@@ -277,7 +313,7 @@ impl GpuContext {
 
         if adapters.is_empty() {
             error!(target: "aurora", "Couldn't find any suitable adapters!");
-            Err(())
+            Err(NewGpuContextError::NoAdapterFound)
         } else {
             let info = adapters[0].get_info();
             info!(target: "aurora", "Chose WGPU adapter --- Backend: {}, Adapter: {}",
@@ -287,13 +323,22 @@ impl GpuContext {
         }
     }
 
-    pub async fn new() -> Result<Self, ()> {
+    pub async fn new() -> Result<Self, NewGpuContextError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
-        let adapter = Self::select_adapter(&instance)?;
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "wasm32")] {
+                let adapter = instance
+                    .request_adapter(&wgpu::RequestAdapterOptions::default())
+                    .await
+                    .ok_or(NewGpuContextError::RequestAdapterError)?;
+            } else {
+                let adapter = Self::select_adapter(&instance)?;
+            }
+        }
 
         let (device, queue) = adapter
             .request_device(
@@ -305,8 +350,7 @@ impl GpuContext {
                 },
                 None,
             )
-            .await
-            .map_err(|_| ())?;
+            .await?;
 
         let shaders = ShaderManager::new(device.clone());
 
@@ -396,19 +440,45 @@ pub struct AuroraWindow {
     copy_command: Option<wgpu::CommandBuffer>,
 }
 
+#[derive(Error, Debug)]
+pub enum NewWindowResult {
+    #[error("create window failed")]
+    CreateWindowError(#[from] winit::error::OsError),
+
+    #[error("create surface failed")]
+    CreateSurfaceError(#[from] wgpu::CreateSurfaceError),
+
+    #[cfg(target_arch = "wasm32")]
+    #[error("html element `{0}` not found")]
+    HTMLElementNotFound(String),
+}
+
 impl AuroraWindow {
     fn new(
         gpu: Arc<GpuContext>,
         render_target: Arc<RenderTarget>,
         event_loop: &ActiveEventLoop,
-    ) -> Result<Self, ()> {
-        let attributes = winit::window::WindowAttributes::default().with_title("Aurora");
-        let window = Arc::new(event_loop.create_window(attributes).map_err(|_| ())?);
+    ) -> Result<Self, NewWindowResult> {
+        let mut attributes = winit::window::WindowAttributes::default().with_title("Aurora");
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowAttributesExtWebSys;
+            use NewWindowResult::HTMLElementNotFound as HTMLNF;
 
-        let surface = gpu
-            .instance
-            .create_surface(window.clone())
-            .map_err(|_| ())?;
+            const CANVAS_ID: &str = "aurora";
+            let window = web_sys::window().ok_or(HTMLNF("window".to_string()))?;
+            let document = window.document().ok_or(HTMLNF("document".to_string()))?;
+            let canvas = document
+                .get_element_by_id(CANVAS_ID)
+                .ok_or(HTMLNF(format!("canvas - {CANVAS_ID}")))?;
+            let html_canvas_element = canvas.unchecked_into();
+
+            attributes = attributes.with_canvas(Some(html_canvas_element));
+        }
+
+        let window = Arc::new(event_loop.create_window(attributes)?);
+
+        let surface = gpu.instance.create_surface(window.clone())?;
         let capabilities = surface.get_capabilities(&gpu.adapter);
         let surface_format = capabilities
             .formats
@@ -547,6 +617,7 @@ impl UiContext {
                     let mut scene = scene.try_borrow_mut().unwrap();
                     egui::Window::new("Scene Configuration")
                         .default_open(true)
+                        .resizable(true)
                         .show(ctx, |ui| {
                             scene.draw_ui(ui);
                         });

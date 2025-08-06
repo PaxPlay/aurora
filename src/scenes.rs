@@ -537,11 +537,70 @@ pub struct SceneGeometry {
 }
 
 impl SceneGeometry {
-    pub fn new(file: &str) -> Self {
+    #[cfg(target_arch = "wasm32")]
+    async fn load_file_from_network(url: &str) -> Result<bytes::Bytes, reqwest::Error> {
+        /*
+        use web_sys::{Request, RequestInit, Response};
+        let opts = RequestInit::new();
+        opts.set_method("GET");
+
+        // oh what fun ._.
+        let request = Request::new_with_str_and_init(&url, &opts)?;
+        let window = web_sys::window().unwrap();
+        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
+        let resp: Response = resp_value.dyn_into()?;
+        let buffer_value = JsFuture::from(resp.array_buffer()?).await?;
+
+        Ok(js_sys::Uint8Array::new(&buffer_value))
+        */
+        reqwest::get(url).await?.bytes().await
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    async fn load_from_network(base_url: &str, obj_file: &str) -> tobj::LoadResult {
+        use futures::io::Cursor;
+        use tobj::futures::*;
+        use tobj::LoadError as LE;
+
+        let base_url = format!(
+            "{}/{base_url}",
+            web_sys::window()
+                .expect("should have a window")
+                .location()
+                .origin()
+                .expect("should have an origin")
+        );
+
+        let obj_bytes = Self::load_file_from_network(&format!("{base_url}/{obj_file}"))
+            .await
+            .unwrap();
+        //            .map_err(|_| LE::ReadError)?;
+
+        let mut reader = Cursor::new(obj_bytes);
+
+        load_obj_buf(&mut reader, &tobj::GPU_LOAD_OPTIONS, async |path| {
+            let path = format!("{base_url}/{}", path.display());
+            let mtl_bytes = Self::load_file_from_network(&path)
+                .await
+                .map_err(|_| LE::ReadError)?;
+            let mut mtl_reader = Cursor::new(mtl_bytes);
+            load_mtl_buf(&mut mtl_reader).await
+        })
+        .await
+    }
+
+    pub async fn new(file: &str) -> Self {
         info!(target: "aurora", "Loading scene geometry from file \"{file}\"");
-        let (models, materials) = tobj::load_obj(file, &tobj::GPU_LOAD_OPTIONS)
-            .expect(format!("Unable to load obj file for {}", file).as_str());
-        let materials = materials.unwrap();
+        cfg_if::cfg_if! {
+            if #[cfg(target_arch = "wasm32")] {
+                let load_result = Self::load_from_network("models", file).await;
+            } else {
+                let load_result = tobj::load_obj(format!("models/{file}"), &tobj::GPU_LOAD_OPTIONS);
+            }
+        }
+        let (models, materials) =
+            load_result.expect(format!("Unable to load obj file for {}", file).as_str());
+        let materials = materials.expect("Materials are missing");
         info!(target: "aurora", "Models: {}, Materials: {}", models.len(), materials.len());
 
         let mut vertices = Vec::new();
@@ -787,9 +846,11 @@ pub struct BasicScene3d {
 }
 
 impl BasicScene3d {
-    pub fn new(file: &str, gpu: Arc<GpuContext>, target: Arc<RenderTarget>) -> Self {
-        let scene_geometry = SceneGeometry::new(file);
-
+    pub fn new(
+        scene_geometry: SceneGeometry,
+        gpu: Arc<GpuContext>,
+        target: Arc<RenderTarget>,
+    ) -> Self {
         let camera = Camera3d::Perspective {
             position: vec3(278f32, 273f32, -800f32),
             angle: vec3(FRAC_PI_2, -FRAC_PI_2, 0f32).into(),
