@@ -38,6 +38,7 @@ struct Schedule {
     num_nee_rays: atomic<u32>,
     num_intersections: atomic<u32>,
     num_misses: atomic<u32>,
+    rng_seed_index: u32,
 }
 
 const F32_MAX: f32 = 3.4028e38;
@@ -49,8 +50,9 @@ const EPSILON: f32 = 1e-10;
 @group(1) @binding(1) var<storage, read_write> rays : array<Ray>;
 @group(1) @binding(2) var<storage, read_write> ray_intersections: array<RayIntersectionData>;
 @group(1) @binding(3) var<storage, read_write> schedule: Schedule;
+@group(1) @binding(4) var<storage, read> rng_seeds: array<u32>;
 
-@group(2) @binding(0) var output_texture: texture_storage_2d<rgba16float, write>; 
+@group(2) @binding(0) var output_texture: texture_storage_2d<rgba16float, read_write>; 
 
 struct SceneGeometrySizes {
     vertices: u32,
@@ -81,7 +83,7 @@ fn schedule_invocations(
 ) {
     let num_rays = atomicLoad(&schedule.num_rays);
     schedule.ray_intersection_groups = vec4<u32>(
-        (num_rays + 255) / 256,
+        (num_rays + 127) / 128,
         1,
         1,
         num_rays,
@@ -99,6 +101,8 @@ fn schedule_invocations(
     atomicStore(&schedule.num_nee_rays, 0u);
     atomicStore(&schedule.num_intersections, 0u);
     atomicStore(&schedule.num_misses, 0u);
+
+    schedule.rng_seed_index += 1;
 }
 
 @compute
@@ -136,127 +140,13 @@ fn generate_rays(
         atomicStore(&schedule.num_misses, 0u);
 
         schedule.ray_intersection_groups = vec4<u32>(
-            (num_rays + 255) / 256,
+            (num_rays + 127) / 128,
             1,
             1,
             num_rays,
         );
-    }
-}
 
-var<workgroup> local_vertices: array<vec3<f32>, 768>;
-var<workgroup> wg_num_intersections: atomic<u32>;
-var<workgroup> wg_num_misses: atomic<u32>;
-var<workgroup> wg_intersections: array<RayIntersectionData, 256>;
-var<workgroup> wg_misses: array<u32, 256>;
-var<workgroup> wg_isec_group_start: u32;
-var<workgroup> wg_miss_group_start: u32;
-
-@compute
-@workgroup_size(256, 1, 1)
-fn intersect_rays(
-    @builtin(global_invocation_id) gid: vec3<u32>,
-    @builtin(local_invocation_index) lidx: u32
-) {
-    let num_rays = schedule.ray_intersection_groups.w;
-
-    if gid.x == 0 {
-        atomicStore(&wg_num_intersections, 0u);
-        atomicStore(&wg_num_misses, 0u);
-    }
-
-    if gid.x >= num_rays {
-        return;
-    }
-
-    let ray = rays[gid.x];
-
-    let num_triangles = sizes.indices / 3;
-    if lidx < (num_triangles * 3) {
-        let idx = indices[lidx];
-        local_vertices[lidx] = vec3<f32>(
-            vertices[idx * 3],
-            vertices[idx * 3 + 1],
-            vertices[idx * 3 + 2],
-        );
-    }
-
-    workgroupBarrier();
-
-    var isec: RayIntersectionData;
-    isec.pos = vec3<f32>(-1, -1, -1);
-    isec.t = F32_MAX;
-    isec.primary_ray = ray.primary_ray;
-
-    for (var i: u32; i < num_triangles; i++) {
-        // https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
-        let a = local_vertices[3 * i];
-        let b = local_vertices[3 * i + 1];
-        let c = local_vertices[3 * i + 2];
-
-        let e1 = b - a;
-        let e2 = c - a;
-
-        let ray_cross_e2 = cross(ray.direction, e2);
-        let det = dot(e1, ray_cross_e2);
-
-        if abs(det) < EPSILON {
-            continue;
-        }
-
-        let inv_det = 1.0 / det;
-        let s = ray.origin - a;
-        let u = inv_det * dot(s, ray_cross_e2);
-
-        if u < 0.0 || u > 1.0 {
-            continue;
-        }
-
-        let s_cross_e1 = cross(s, e1);
-        let v = inv_det * dot(ray.direction, s_cross_e1);
-        if v < 0.0 || (u + v) > 1.0 {
-            continue;
-        }
-
-        let t = inv_det * dot(e2, s_cross_e1);
-        if t > EPSILON && t < isec.t {
-            isec.t = t;
-            isec.pos = ray.origin + t * ray.direction;
-            isec.surface_id = i;
-            isec.n = normalize(cross(e1, e2));
-            isec.w_i = -ray.direction;
-            isec.weight = ray.weight;
-        }
-    }
-
-    // Sum up intersection in workgroup
-    if isec.t < 1e38 {
-        let local_idx = atomicAdd(&wg_num_intersections, 1u);
-        wg_intersections[local_idx] = isec;
-    } else {
-        let local_idx = atomicAdd(&wg_num_misses, 1u);
-        wg_misses[local_idx] = isec.primary_ray;
-    }
-
-    workgroupBarrier();
-
-    let num_intersections = atomicLoad(&wg_num_intersections);
-    let num_misses = atomicLoad(&wg_num_misses);
-
-    // Sum up total intersections using global atomics
-    // results of the atomics are the start indices in the respective buffers
-    if lidx == 0 {
-        wg_isec_group_start = atomicAdd(&schedule.num_intersections,
-            num_intersections);
-        wg_miss_group_start = atomicAdd(&schedule.num_misses,
-            num_misses);
-    }
-
-    workgroupBarrier();
-
-    // write intersection information into global buffers
-    if lidx < num_intersections {
-        ray_intersections[wg_isec_group_start + lidx] = wg_intersections[lidx];
+        schedule.rng_seed_index = 0;
     }
 }
 
@@ -366,7 +256,7 @@ fn handle_intersections(
         atomicStore(&wg_num_rays, 0u);
     }
 
-    var pcg: PCG = pcg_seed(0, gid.x);
+    var pcg: PCG = pcg_seed(rng_seeds[schedule.rng_seed_index], gid.x);
 
     let total_num_intersections = schedule.handle_intersections_groups.w;
     if gid.x < total_num_intersections {
@@ -374,7 +264,7 @@ fn handle_intersections(
         let mat_idx = material_indices[isec.surface_id];
 
         // Russian Roulette
-        const alpha = 0.9;
+        const alpha = 0.6;
         let xi = pcg_next_f32(&pcg);
         if xi <= alpha {
             let m_d = get_diffuse(mat_idx);
@@ -385,11 +275,12 @@ fn handle_intersections(
             let pdf = bsdf_pdf_phong(w_o);
             let f = bsdf_eval_phong(m_d, m_s, 0.0, isec.w_i, isec.n, w_o);
             
-            let weight = isec.weight * f / pdf / alpha;
+            let weight = isec.weight * f / pdf / alpha * dot(isec.n, w_o);
             var secondary_ray: Ray;
             secondary_ray.origin = isec.pos + 0.0001 * w_o;
             secondary_ray.direction = w_o;
             secondary_ray.weight = weight;
+            secondary_ray.primary_ray = isec.primary_ray;
             
             let ray_index = atomicAdd(&wg_num_rays, 1u);
             wg_rays[ray_index] = secondary_ray;
@@ -398,7 +289,7 @@ fn handle_intersections(
         let primary = primary_rays[isec.primary_ray];
         let m_a = get_ambient(mat_idx);
         let result_color = &primary_rays[isec.primary_ray].result_color;
-        let delta = m_a * isec.weight;
+        let delta = m_a * isec.weight * dot(isec.w_i, isec.n);
         (*result_color).r += delta.r;
         (*result_color).g += delta.g;
         (*result_color).b += delta.b;
@@ -430,5 +321,9 @@ fn copy_target(
 
     let color = primary_rays[camera.resolution.x * gid.y + gid.x].result_color;
 
-    textureStore(output_texture, gid.xy, color);
+    let previous = textureLoad(output_texture, gid.xy);
+    let samples = previous.a + 1;
+    let rgb = color.rgb / samples + previous.rgb * (samples - 1.0) / samples;
+    textureStore(output_texture, gid.xy, vec4(rgb, samples));
 }
+

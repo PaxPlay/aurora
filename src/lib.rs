@@ -11,6 +11,8 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::{collections::BTreeMap, default::Default};
 use wgpu::Extent3d;
+#[cfg(target_os = "linux")]
+use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 
 use log::{debug, error, info};
@@ -24,6 +26,10 @@ struct Args {
     #[arg(long)]
     list_formats: bool,
 
+    #[cfg(target_os = "linux")]
+    #[arg(long)]
+    force_x11: bool,
+
     #[arg(short, long)]
     format: Option<String>,
 }
@@ -35,6 +41,7 @@ pub struct Aurora {
     window: Option<AuroraWindow>,
     scenes: BTreeMap<String, SceneHandle>,
     current_scene: Option<String>,
+    args: Args,
 }
 
 type SceneHandle = Arc<RefCell<Box<dyn Scene>>>; // this language might not be real
@@ -56,12 +63,12 @@ impl Aurora {
         if args.list_formats {
             println!("Supported texture formats:");
             for format in formats {
-                println!("- {:?}", format);
+                println!("- {format:?}");
             }
             std::process::exit(0);
         }
 
-        let format = Self::select_format(&formats, args.format);
+        let format = Self::select_format(&formats, args.format.clone());
         let target = Arc::new(RenderTarget::new(&gpu, format));
 
         Ok(Self {
@@ -70,6 +77,7 @@ impl Aurora {
             window: None,
             scenes: BTreeMap::new(),
             current_scene: None,
+            args,
         })
     }
 
@@ -98,26 +106,34 @@ impl Aurora {
     ) -> wgpu::TextureFormat {
         if let Some(selected) = selection {
             for format in supported_formats {
-                let format_str = format!("{:?}", format);
+                let format_str = format!("{format:?}");
                 if selected == format_str {
                     return *format;
                 }
             }
 
-            error!(target: "aurora", "Selected format {} is not supported", selected);
+            error!(target: "aurora", "Selected format {selected} is not supported");
         }
 
         let format = *supported_formats
             .first()
             .expect("None of the supported formats are abailable on this platform.");
-        info!(target: "aurora", "Automatically selected format \"{:?}\"", format);
+        info!(target: "aurora", "Automatically selected format \"{format:?}\"");
         format
     }
 
     pub fn run(&mut self) -> Result<(), winit::error::EventLoopError> {
         info!(target: "aurora", "Running Aurora in windowed mode!");
 
-        let event_loop = winit::event_loop::EventLoop::new()?;
+        let mut event_loop_builder = winit::event_loop::EventLoop::builder();
+        #[cfg(target_os = "linux")]
+        {
+            if self.args.force_x11 {
+                event_loop_builder.with_x11();
+            }
+        }
+        let event_loop = event_loop_builder.build()?;
+
         event_loop.run_app(self)?;
         Ok(())
     }
@@ -398,11 +414,10 @@ impl AuroraWindow {
             .formats
             .iter()
             .copied()
-            .filter(|c| c.is_srgb())
-            .next()
+            .find(|c| c.is_srgb())
             .unwrap_or(capabilities.formats[0]);
 
-        debug!(target: "aurora", "Selected surface format for main window: {:?}", surface_format);
+        debug!(target: "aurora", "Selected surface format for main window: {surface_format:?}");
 
         let size = window.inner_size();
         let surface_config = wgpu::SurfaceConfiguration {

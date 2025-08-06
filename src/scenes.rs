@@ -837,18 +837,23 @@ impl Scene for BasicScene3d {
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
     ) -> Vec<wgpu::CommandBuffer> {
-        let copy_cb = self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
+        let mut res: Vec<wgpu::CommandBuffer> = Vec::with_capacity(3);
+
+        res.push(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
             self.camera.update_buffer(ctx);
-        });
+        }));
 
         let mut view = self
             .views
             .get(&self.current_view)
             .expect("Selected view does not exist.")
             .borrow_mut();
-        let view_cb = view.render(gpu, target, self);
+        if let Some(view_copy_cb) = view.copy(gpu.clone()) {
+            res.push(view_copy_cb);
+        }
 
-        vec![copy_cb, view_cb]
+        res.push(view.render(gpu, target, self));
+        res
     }
 
     fn draw_ui(&mut self, ui: &mut egui::Ui) {
@@ -873,6 +878,10 @@ pub trait Scene3dView {
         target: Arc<RenderTarget>,
         scene: &BasicScene3d,
     ) -> wgpu::CommandBuffer;
+
+    fn copy(&mut self, _gpu: Arc<GpuContext>) -> Option<wgpu::CommandBuffer> {
+        None
+    }
 }
 
 struct WireframeView {

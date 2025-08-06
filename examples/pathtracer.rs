@@ -5,15 +5,13 @@ use aurora::{
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
     Aurora, GpuContext,
 };
+use rand::Rng;
 use std::sync::Arc;
 
-fn main() {
-    pollster::block_on(run());
-}
-
-async fn run() {
+fn main() -> std::process::ExitCode {
     env_logger::init();
-    let mut aurora = Aurora::new().await.unwrap();
+
+    let mut aurora = pollster::block_on(Aurora::new()).unwrap();
 
     let mut scene = BasicScene3d::new(
         "models/cornell_box.obj",
@@ -26,6 +24,7 @@ async fn run() {
     );
     aurora.add_scene("basic_3d", Box::new(scene));
     aurora.run().unwrap();
+    std::process::ExitCode::SUCCESS
 }
 
 struct PathTracerView {
@@ -35,10 +34,13 @@ struct PathTracerView {
     handle_intersections_pipeline: ComputePipeline,
     target_pipeline: ComputePipeline,
     schedule_buffer: Buffer<u32>,
+    seed_buffer: Buffer<u32>,
     bg_camera: wgpu::BindGroup,
     bg_rays: wgpu::BindGroup,
     bgl_image: BindGroupLayout,
     bg_image: Option<wgpu::BindGroup>,
+    buffer_copy_util: aurora::buffers::BufferCopyUtil,
+    rng: rand::rngs::ThreadRng,
 }
 
 impl PathTracerView {
@@ -65,6 +67,12 @@ impl PathTracerView {
             "schedule",
             64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
+        );
+
+        let seed_buffer: Buffer<u32> = gpu.create_buffer(
+            "pt_seeds",
+            64,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         );
 
         let bgl_camera = BindGroupLayoutBuilder::new(gpu.clone())
@@ -104,6 +112,11 @@ impl PathTracerView {
                 wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: false },
             )
+            .add_buffer(
+                4,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
             .build();
 
         let bg_rays = bgl_rays
@@ -113,6 +126,7 @@ impl PathTracerView {
             .buffer(1, &ray_buffer)
             .buffer(2, &ray_intersection_buffer)
             .buffer(3, &schedule_buffer)
+            .buffer(4, &seed_buffer)
             .build()
             .unwrap();
 
@@ -120,7 +134,7 @@ impl PathTracerView {
             .add_storage_texture(
                 0,
                 wgpu::ShaderStages::COMPUTE,
-                wgpu::StorageTextureAccess::WriteOnly,
+                wgpu::StorageTextureAccess::ReadWrite,
                 wgpu::TextureFormat::Rgba16Float,
                 wgpu::TextureViewDimension::D2,
             )
@@ -140,6 +154,7 @@ impl PathTracerView {
             });
 
         register_default!(gpu.shaders, "path_tracer", "shader/pathtracer.wgsl");
+        register_default!(gpu.shaders, "intersect", "shader/intersect.wgsl");
 
         let pl = pipeline_layout.clone();
         let schedule_pipeline = compute_pipeline!(gpu, path_tracer; &wgpu::ComputePipelineDescriptor {
@@ -162,10 +177,10 @@ impl PathTracerView {
         });
 
         let pl = pipeline_layout.clone();
-        let ray_intersection_pipeline = compute_pipeline!(gpu, path_tracer; &wgpu::ComputePipelineDescriptor {
+        let ray_intersection_pipeline = compute_pipeline!(gpu, intersect; &wgpu::ComputePipelineDescriptor {
             label: Some("pt_pipeline_ray_intersection"),
             layout: Some(&pl),
-            module: &path_tracer,
+            module: &intersect,
             entry_point: Some("intersect_rays"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None
@@ -197,15 +212,27 @@ impl PathTracerView {
             handle_intersections_pipeline,
             target_pipeline,
             schedule_buffer,
+            seed_buffer,
             bg_camera,
             bg_rays,
             bgl_image,
             bg_image: None,
+            buffer_copy_util: aurora::buffers::BufferCopyUtil::new(2048),
+            rng: rand::rng(),
         }
     }
 }
 
 impl Scene3dView for PathTracerView {
+    fn copy(&mut self, gpu: Arc<GpuContext>) -> Option<wgpu::CommandBuffer> {
+        // rust is fun some times
+        let seeds: Vec<_> = self.rng.clone().random_iter::<u32>().take(16).collect();
+
+        Some(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
+            self.seed_buffer.write(ctx, &seeds);
+        }))
+    }
+
     fn render(
         &mut self,
         gpu: Arc<aurora::GpuContext>,
@@ -239,7 +266,7 @@ impl Scene3dView for PathTracerView {
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);
 
-            for _ in 0..3 {
+            for _ in 0..15 {
                 // ray triangle intersections
                 compute_pass.set_pipeline(&self.ray_intersection_pipeline.get());
                 compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 0);
