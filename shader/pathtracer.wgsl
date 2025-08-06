@@ -17,6 +17,7 @@ struct PrimaryRayData {
 struct Ray {
     origin: vec3<f32>,
     direction: vec3<f32>,
+    weight: vec3<f32>,
     primary_ray: u32,
 }
 
@@ -24,6 +25,7 @@ struct RayIntersectionData {
     pos: vec3<f32>,
     n: vec3<f32>,
     w_i: vec3<f32>,
+    weight: vec3<f32>,
     t: f32,
     surface_id: u32,
     primary_ray: u32,
@@ -122,6 +124,7 @@ fn generate_rays(
         ray.origin = ray_data.origin;
         ray.direction = ray_data.direction;
         ray.primary_ray = idx;
+        ray.weight = vec3<f32>(1.0);
         rays[idx] = ray;
     }
 
@@ -222,6 +225,7 @@ fn intersect_rays(
             isec.surface_id = i;
             isec.n = normalize(cross(e1, e2));
             isec.w_i = -ray.direction;
+            isec.weight = ray.weight;
         }
     }
 
@@ -256,24 +260,162 @@ fn intersect_rays(
     }
 }
 
+struct PCG {
+    state: u32,
+    inc: u32,
+}
+
+fn pcg_seed(initstate: u32, initseq: u32) -> PCG {
+    var pcg: PCG;
+    pcg.state = 0u;
+    pcg.inc = (initseq << 1u) | 1u;
+    pcg_next_u32(&pcg);
+    pcg.state += initstate;
+    pcg_next_u32(&pcg);
+    return pcg;
+}
+
+fn pcg_next_u32(pcg: ptr<function, PCG>) -> u32 {
+    let state = (*pcg).state * 747796405u + (*pcg).inc;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    (*pcg).state = (word >> 22u) ^ word;
+    return (*pcg).state;
+}
+
+fn pcg_next_f32(pcg: ptr<function, PCG>) -> f32 {
+    return bitcast<f32>((pcg_next_u32(pcg) >> 9) | 0x3f800000u) - 1.0f;
+}
+
+fn pcg_next_square(pcg: ptr<function, PCG>) -> vec2<f32> {
+    return vec2(pcg_next_f32(pcg), pcg_next_f32(pcg));
+}
+
+const PI: f32 = 3.14159265359;
+
+fn warp_square_to_hemisphere(sample: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
+    let cosTheta = sample.x;
+    let sinTheta = sqrt(1 - cosTheta * cosTheta);
+
+    let phi = 2.0 * PI * sample.y;
+    let sinPhi = sin(phi);
+    let cosPhi = cos(phi);
+
+    let up_hemisphere = vec3<f32>(
+        sinPhi * sinTheta,
+        cosPhi * sinTheta,
+        cosTheta,
+    );
+
+    if dot(up_hemisphere, n) < 0 {
+        return -1.0 * up_hemisphere;
+    } else {
+        return up_hemisphere;
+    }
+}
+
+fn bsdf_sample_phong(sample: vec2<f32>, w_i: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    return warp_square_to_hemisphere(sample, n);
+}
+
+fn bsdf_pdf_phong(w_o: vec3<f32>) -> f32 {
+    return 1 / (2 * PI);
+}
+
+fn bsdf_eval_phong(m_d: vec3<f32>, m_s: vec3<f32>, m_n: f32,
+                   w_i: vec3<f32>, n: vec3<f32>, w_o: vec3<f32>) -> vec3<f32> {
+    let ideal = normalize(reflect(w_i, n));
+
+    return m_d / PI + m_s * (n + 2) / (2 * PI) * pow(dot(ideal, w_o), m_n);
+}
+
+fn get_ambient(index: u32) -> vec3<f32> {
+    return vec3(
+        ambient[3 * index],
+        ambient[3 * index + 1],
+        ambient[3 * index + 2],
+    );
+}
+
+fn get_diffuse(index: u32) -> vec3<f32> {
+    return vec3(
+        diffuse[3 * index],
+        diffuse[3 * index + 1],
+        diffuse[3 * index + 2],
+    );
+}
+
+fn get_specular(index: u32) -> vec3<f32> {
+    return vec3(
+        specular[3 * index],
+        specular[3 * index + 1],
+        specular[3 * index + 2],
+    );
+}
+
+var<workgroup> wg_rays: array<Ray, 256>;
+var<workgroup> wg_num_rays: atomic<u32>;
+var<workgroup> wg_ray_buffer_start: u32;
+
 @compute
 @workgroup_size(256, 1, 1)
 fn handle_intersections(
-    @builtin(global_invocation_id) gid: vec3<u32>
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lidx: u32
 ) {
+    if lidx == 0 {
+        atomicStore(&wg_num_rays, 0u);
+    }
+
+    var pcg: PCG = pcg_seed(0, gid.x);
+
     let total_num_intersections = schedule.handle_intersections_groups.w;
     if gid.x < total_num_intersections {
         let isec = ray_intersections[gid.x];
         let mat_idx = material_indices[isec.surface_id];
-        let diff = vec3<f32>(
-            diffuse[3 * mat_idx],
-            diffuse[3 * mat_idx + 1],
-            diffuse[3 * mat_idx + 2],
-        );
-        let primary = primary_rays[isec.primary_ray];
-        let color = diff * pow(dot(isec.w_i, isec.n), 3.0);
 
-        primary_rays[isec.primary_ray].result_color = vec4(color, 1.0f);
+        // Russian Roulette
+        const alpha = 0.9;
+        let xi = pcg_next_f32(&pcg);
+        if xi <= alpha {
+            let m_d = get_diffuse(mat_idx);
+            let m_s = get_specular(mat_idx);
+
+            let sample = pcg_next_square(&pcg);
+            let w_o = bsdf_sample_phong(sample, isec.w_i, isec.n);
+            let pdf = bsdf_pdf_phong(w_o);
+            let f = bsdf_eval_phong(m_d, m_s, 0.0, isec.w_i, isec.n, w_o);
+            
+            let weight = isec.weight * f / pdf / alpha;
+            var secondary_ray: Ray;
+            secondary_ray.origin = isec.pos + 0.0001 * w_o;
+            secondary_ray.direction = w_o;
+            secondary_ray.weight = weight;
+            
+            let ray_index = atomicAdd(&wg_num_rays, 1u);
+            wg_rays[ray_index] = secondary_ray;
+        }
+
+        let primary = primary_rays[isec.primary_ray];
+        let m_a = get_ambient(mat_idx);
+        let result_color = &primary_rays[isec.primary_ray].result_color;
+        let delta = m_a * isec.weight;
+        (*result_color).r += delta.r;
+        (*result_color).g += delta.g;
+        (*result_color).b += delta.b;
+        (*result_color).a = 1.0f;
+    }
+
+    // write back rays into ray buffer
+    workgroupBarrier();
+
+    if lidx == 0 {
+        wg_ray_buffer_start = atomicAdd(&schedule.num_rays, atomicLoad(&wg_num_rays));
+    }
+
+    workgroupBarrier();
+
+    if lidx < wg_num_rays {
+        rays[wg_ray_buffer_start + lidx] = wg_rays[lidx];
     }
 }
 

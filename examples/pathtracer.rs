@@ -53,11 +53,11 @@ impl PathTracerView {
         );
 
         let ray_buffer: Buffer<f32> =
-            gpu.create_buffer("rays", 32 * total_pixels, wgpu::BufferUsages::STORAGE);
+            gpu.create_buffer("rays", 64 * total_pixels, wgpu::BufferUsages::STORAGE);
 
         let ray_intersection_buffer: Buffer<f32> = gpu.create_buffer(
             "ray_intersections",
-            64 * total_pixels,
+            80 * total_pixels,
             wgpu::BufferUsages::STORAGE,
         );
 
@@ -239,17 +239,21 @@ impl Scene3dView for PathTracerView {
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);
 
-            // ray triangle intersections
-            compute_pass.set_pipeline(&self.ray_intersection_pipeline.get());
-            compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 0);
+            for _ in 0..3 {
+                // ray triangle intersections
+                compute_pass.set_pipeline(&self.ray_intersection_pipeline.get());
+                compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 0);
+                // schedule
+                compute_pass.set_pipeline(&self.schedule_pipeline.get());
+                compute_pass.dispatch_workgroups(1, 1, 1);
 
-            // schedule
-            compute_pass.set_pipeline(&self.schedule_pipeline.get());
-            compute_pass.dispatch_workgroups(1, 1, 1);
-
-            // handle intersections
-            compute_pass.set_pipeline(&self.handle_intersections_pipeline.get());
-            compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 16);
+                // handle intersections
+                compute_pass.set_pipeline(&self.handle_intersections_pipeline.get());
+                compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 16);
+                // schedule
+                compute_pass.set_pipeline(&self.schedule_pipeline.get());
+                compute_pass.dispatch_workgroups(1, 1, 1);
+            }
         }
         {
             let mut compute_pass = ce.begin_compute_pass(&wgpu::ComputePassDescriptor {
