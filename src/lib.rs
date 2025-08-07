@@ -85,11 +85,6 @@ impl Aurora {
             std::process::exit(0);
         }
 
-        info!("Supported texture formats:");
-        for format in &formats {
-            info!("- {format:?}");
-        }
-
         let format = Self::select_format(&formats, args.format.clone());
         let target = Arc::new(RenderTarget::new(&gpu, format));
 
@@ -392,7 +387,7 @@ pub struct RenderTarget {
 impl RenderTarget {
     fn usage() -> wgpu::TextureUsages {
         wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::TEXTURE_BINDING
     }
 

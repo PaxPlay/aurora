@@ -12,6 +12,7 @@ struct PrimaryRayData {
     origin: vec3<f32>,
     direction: vec3<f32>,
     result_color: vec4<f32>,
+    accumulated_color: vec4<f32>,
 }
 
 struct Ray {
@@ -52,7 +53,8 @@ const EPSILON: f32 = 1e-10;
 @group(1) @binding(3) var<storage, read_write> schedule: Schedule;
 @group(1) @binding(4) var<storage, read> rng_seeds: array<u32>;
 
-@group(2) @binding(0) var output_texture: texture_storage_2d<rgba16float, read_write>; 
+@group(2) @binding(0) var<storage, read_write> output_buffer_f32: array<f32>; 
+@group(2) @binding(1) var<storage, read_write> output_buffer_f16: array<u32>; // pack with pack2x16float
 
 struct SceneGeometrySizes {
     vertices: u32,
@@ -122,7 +124,9 @@ fn generate_rays(
     if gid.x < camera.resolution.x && gid.y < camera.resolution.y {
         let idx = camera.resolution.x * gid.y + gid.x;
 
-        primary_rays[idx] = ray_data;
+        primary_rays[idx].origin = ray_data.origin;
+        primary_rays[idx].direction = ray_data.direction;
+        primary_rays[idx].result_color = ray_data.result_color;
 
         var ray: Ray;
         ray.origin = ray_data.origin;
@@ -319,11 +323,19 @@ fn copy_target(
         return;
     }
 
-    let color = primary_rays[camera.resolution.x * gid.y + gid.x].result_color;
+    let index = camera.resolution.x * gid.y + gid.x;
+    var color = primary_rays[index].result_color;
+    color += primary_rays[index].accumulated_color;
+    primary_rays[index].accumulated_color = color;
 
-    let previous = textureLoad(output_texture, gid.xy);
-    let samples = previous.a + 1;
-    let rgb = color.rgb / samples + previous.rgb * (samples - 1.0) / samples;
-    textureStore(output_texture, gid.xy, vec4(rgb, samples));
+    color /= color.a;
+
+    output_buffer_f32[4 * index    ] = color.r;
+    output_buffer_f32[4 * index + 1] = color.g;
+    output_buffer_f32[4 * index + 2] = color.b;
+    output_buffer_f32[4 * index + 3] = color.a;
+
+    output_buffer_f16[2 * index    ] = pack2x16float(color.rg);
+    output_buffer_f16[2 * index + 1] = pack2x16float(color.ba);
 }
 

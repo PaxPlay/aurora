@@ -32,6 +32,38 @@ async fn main_async() {
     aurora.run().unwrap();
 }
 
+struct ImageStorageBuffer {
+    resolution: [u32; 2],
+    pixel_buffer: Option<Buffer<f32>>,
+}
+
+impl ImageStorageBuffer {
+    fn new() -> Self {
+        Self {
+            resolution: [0, 0],
+            pixel_buffer: None,
+        }
+    }
+
+    fn resize(&mut self, gpu: &GpuContext, type_size: usize, width: u32, height: u32) -> bool {
+        if width == self.resolution[0] && height == self.resolution[1] {
+            return false;
+        }
+
+        self.resolution = [width, height];
+        self.pixel_buffer = Some(gpu.create_buffer(
+            "image_storage_buffer",
+            width as usize * height as usize * 4 * type_size,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        ));
+        true
+    }
+
+    fn get(&self) -> Option<Buffer<f32>> {
+        self.pixel_buffer.clone()
+    }
+}
+
 struct PathTracerView {
     schedule_pipeline: ComputePipeline,
     ray_generation_pipeline: ComputePipeline,
@@ -40,12 +72,16 @@ struct PathTracerView {
     target_pipeline: ComputePipeline,
     schedule_buffer: Buffer<u32>,
     seed_buffer: Buffer<u32>,
+    primary_ray_buffer: Buffer<f32>,
     bg_camera: wgpu::BindGroup,
     bg_rays: wgpu::BindGroup,
+    image_f32: ImageStorageBuffer,
+    image_target_format: ImageStorageBuffer,
     bgl_image: BindGroupLayout,
     bg_image: Option<wgpu::BindGroup>,
     buffer_copy_util: aurora::buffers::BufferCopyUtil,
     rng: rand::rngs::ThreadRng,
+    should_clear: bool,
 }
 
 impl PathTracerView {
@@ -55,8 +91,8 @@ impl PathTracerView {
 
         let primary_ray_buffer: Buffer<f32> = gpu.create_buffer(
             "primary_rays",
-            size_of::<f32>() * 4 * 3 * total_pixels,
-            wgpu::BufferUsages::STORAGE,
+            size_of::<f32>() * 4 * 4 * total_pixels,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         );
 
         let ray_buffer: Buffer<f32> =
@@ -137,14 +173,20 @@ impl PathTracerView {
 
         let bgl_image = BindGroupLayoutBuilder::new(gpu.clone())
             .label("bgl_image")
-            .add_storage_texture(
+            .add_buffer(
                 0,
                 wgpu::ShaderStages::COMPUTE,
-                wgpu::StorageTextureAccess::ReadWrite,
-                wgpu::TextureFormat::Rgba16Float,
-                wgpu::TextureViewDimension::D2,
+                wgpu::BufferBindingType::Storage { read_only: false },
+            )
+            .add_buffer(
+                1,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
             )
             .build();
+
+        let image_f32 = ImageStorageBuffer::new();
+        let image_target_format = ImageStorageBuffer::new();
 
         let pipeline_layout = gpu
             .device
@@ -159,8 +201,8 @@ impl PathTracerView {
                 push_constant_ranges: &[],
             });
 
-        register_default!(gpu.shaders, "path_tracer", "../shader/pathtracer.wgsl");
-        register_default!(gpu.shaders, "intersect", "../shader/intersect.wgsl");
+        register_default!(gpu.shaders, "path_tracer", "shader/pathtracer.wgsl");
+        register_default!(gpu.shaders, "intersect", "shader/intersect.wgsl");
 
         let pl = pipeline_layout.clone();
         let schedule_pipeline = compute_pipeline!(gpu, path_tracer; &wgpu::ComputePipelineDescriptor {
@@ -219,12 +261,52 @@ impl PathTracerView {
             target_pipeline,
             schedule_buffer,
             seed_buffer,
+            primary_ray_buffer,
             bg_camera,
             bg_rays,
+            image_f32,
+            image_target_format,
             bgl_image,
             bg_image: None,
             buffer_copy_util: aurora::buffers::BufferCopyUtil::new(2048),
             rng: rand::rng(),
+            should_clear: true,
+        }
+    }
+
+    /// Check images against resolution and rebuild bind group if neccesary
+    fn check_image_bg(&mut self, gpu: Arc<GpuContext>, target: &aurora::RenderTarget) {
+        let mut resized = self
+            .image_f32
+            .resize(&gpu, 4, target.size[0], target.size[1]);
+
+        use wgpu::TextureFormat as TF;
+        let target_type_size = match target.format {
+            TF::Rgba8Unorm => 1,
+            TF::Rgba16Float => 2,
+            TF::Rgba32Float => 4,
+            _ => panic!("Target texture format not supported by PathTracerView::check_image_bg"),
+        };
+
+        resized |=
+            self.image_target_format
+                .resize(&gpu, target_type_size, target.size[0], target.size[1]);
+
+        if resized || self.bg_image.is_none() {
+            let builder = self.bgl_image.bind_group_builder();
+            let buffer_f32 = self.image_f32.get().expect(
+                "Failed getting image f32 buffer after resize, this should not be possible",
+            );
+            let buffer_target_format = self.image_target_format.get().expect(
+                "Failed getting image target type buffer after resize, this should not be possible",
+            );
+            self.bg_image = Some(
+                builder
+                    .buffer(0, &buffer_f32)
+                    .buffer(1, &buffer_target_format)
+                    .build()
+                    .unwrap(),
+            );
         }
     }
 }
@@ -245,16 +327,22 @@ impl Scene3dView for PathTracerView {
         target: Arc<aurora::RenderTarget>,
         scene: &BasicScene3d,
     ) -> wgpu::CommandBuffer {
-        if self.bg_image.is_none() {
-            let builder = self.bgl_image.bind_group_builder();
-            self.bg_image = Some(builder.texture(0, target.view.clone()).build().unwrap());
-        }
+        self.check_image_bg(gpu.clone(), &target);
 
         let mut ce = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("pt_ce"),
             });
+
+        if self.should_clear {
+            self.should_clear = false;
+            ce.clear_buffer(
+                &self.primary_ray_buffer.buffer,
+                0,
+                Some(self.primary_ray_buffer.size.get() as u64),
+            );
+        }
 
         let resolution = scene.camera.resolution;
         {
@@ -302,6 +390,28 @@ impl Scene3dView for PathTracerView {
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);
         }
+
+        ce.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.image_target_format.get().unwrap().buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(target.size[0] * 4 * 2),
+                    rows_per_image: Some(target.size[1] * 4 * 2),
+                },
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: target.size[0],
+                height: target.size[1],
+                depth_or_array_layers: 1,
+            },
+        );
 
         ce.finish()
     }

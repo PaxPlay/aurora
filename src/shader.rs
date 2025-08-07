@@ -6,6 +6,8 @@ use std::sync::Arc;
 use crate::buffers::Buffer;
 use crate::GpuContext;
 
+use log::warn;
+
 enum ShaderSource {
     Static(wgpu::ShaderSource<'static>),
     Dynamic { file: String },
@@ -122,15 +124,20 @@ impl ShaderManager {
 
 impl ShaderManager {
     fn add_module(&self, name: String, source: ShaderSource) {
+        if self.shaders.borrow().contains_key(&name) {
+            warn!(target: "aurora::shaders", "Attempted to re-register shader {name}");
+            return;
+        }
+
         let handle = DynamicShaderModuleHandle {
             dynamic_module: Arc::new(RefCell::new(DynamicShaderModule::new(
-                name.to_string(),
+                name.clone(),
                 source,
                 self.device.clone(),
             ))),
         };
 
-        self.shaders.borrow_mut().insert(name.to_string(), handle);
+        self.shaders.borrow_mut().insert(name, handle);
     }
     pub fn register_wgsl_static(&self, name: &str, source: wgpu::ShaderSource<'static>) {
         let source = ShaderSource::Static(source);
@@ -472,9 +479,12 @@ impl BindGroupBuilder {
                         wgpu::BindingType::Texture { .. } => wgpu::BindingResource::TextureView(
                             Self::get_binding(entry.binding, &self.textures)?,
                         ),
-                        wgpu::BindingType::StorageTexture { .. } => wgpu::BindingResource::TextureView(
-                            Self::get_binding(entry.binding, &self.textures)?,
-                        ),
+                        wgpu::BindingType::StorageTexture { .. } => {
+                            wgpu::BindingResource::TextureView(Self::get_binding(
+                                entry.binding,
+                                &self.textures,
+                            )?)
+                        }
                         _ => Err(format!("Aurora: Binding type {:?} not supported", entry.ty))?,
                     },
                 })
@@ -487,7 +497,6 @@ impl BindGroupBuilder {
             .gpu
             .device
             .create_bind_group(&wgpu::BindGroupDescriptor {
-
                 label: self.label.as_deref(),
                 layout: &self.layout,
                 entries: &bindings?,

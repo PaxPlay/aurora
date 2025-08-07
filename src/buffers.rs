@@ -1,10 +1,14 @@
+use crate::shader::ComputePipeline;
 use crate::GpuContext;
+use crate::{compute_pipeline, register_default};
 use std::marker::PhantomData;
 use std::num::NonZero;
 use wgpu::util::DeviceExt;
 
+#[derive(Clone)]
 pub struct Buffer<T: bytemuck::Pod> {
     pub buffer: wgpu::Buffer,
+    pub size: NonZero<usize>,
     phantom: PhantomData<T>,
 }
 
@@ -20,6 +24,7 @@ impl<T: bytemuck::Pod> Buffer<T> {
 
         Self {
             buffer,
+            size: NonZero::new(size_of_val(data)).unwrap(),
             phantom: PhantomData,
         }
     }
@@ -34,6 +39,7 @@ impl<T: bytemuck::Pod> Buffer<T> {
 
         Self {
             buffer,
+            size: NonZero::new(size).unwrap(),
             phantom: PhantomData,
         }
     }
@@ -96,5 +102,90 @@ impl BufferCopyContext<'_> {
     fn finish(self) -> wgpu::CommandBuffer {
         self.staging_belt.finish();
         self.command_encoder.finish()
+    }
+}
+
+pub struct BufferConvertCopy {
+    pipeline: ComputePipeline,
+    bind_group: wgpu::BindGroup,
+    size_buffer: Buffer<u32>,
+    size: Option<NonZero<u32>>,
+}
+
+impl BufferConvertCopy {
+    pub fn new<T: bytemuck::Pod, U: bytemuck::Pod>(
+        gpu: std::sync::Arc<GpuContext>,
+        src_buffer: &Buffer<T>,
+        dst_buffer: &Buffer<U>,
+        size: u32,
+    ) -> Self {
+        let bgl = crate::shader::BindGroupLayoutBuilder::new(gpu.clone())
+            .add_buffer(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: true },
+            )
+            .add_buffer(
+                1,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+            )
+            .add_buffer(
+                2,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+            )
+            .build();
+
+        let size_buffer = gpu.create_buffer_init(
+            "buffer_convert_size",
+            &[size, 0, 0, 0],
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
+        let bind_group = bgl
+            .bind_group_builder()
+            .buffer(0, src_buffer)
+            .buffer(1, dst_buffer)
+            .buffer(2, &size_buffer)
+            .build()
+            .expect("Failed creating bind group for BufferConvertCopy");
+
+        register_default!(
+            gpu.shaders,
+            "convert_f32_f16",
+            "shader/buffer_convert_f32_f16.wgsl"
+        );
+
+        let pipeline_layout = gpu
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("pt_pipeline_layout"),
+                bind_group_layouts: &[&bgl.get()],
+                push_constant_ranges: &[],
+            });
+
+        let pipeline = compute_pipeline!(gpu, convert_f32_f16; &wgpu::ComputePipelineDescriptor {
+            label: Some("pt_pipeline_schedule"),
+            layout: Some(&pipeline_layout),
+            module: &convert_f32_f16,
+            entry_point: Some("copy_buffer"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            bind_group,
+            size_buffer,
+            size: NonZero::new(size),
+        }
+    }
+
+    pub fn copy(&mut self, compute_pass: &mut wgpu::ComputePass<'_>) {
+        compute_pass.set_bind_group(0, &self.bind_group, &[]);
+        compute_pass.set_pipeline(&self.pipeline.get());
+        let x = self.size.unwrap().get().div_ceil(256);
+        compute_pass.dispatch_workgroups(x, 1, 1);
     }
 }
