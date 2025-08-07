@@ -65,13 +65,14 @@ struct SceneGeometrySizes {
     diffuse: u32,
     specular: u32,
 };
-@group(3) @binding(0) var<storage> vertices: array<f32>;
+
+@group(3) @binding(0) var<uniform> vertices: array<vec3<f32>, 256>;
 @group(3) @binding(1) var<storage> indices: array<u32>;
 @group(3) @binding(2) var<storage> model_start_indices: array<u32>;
 @group(3) @binding(3) var<storage> material_indices: array<u32>;
-@group(3) @binding(4) var<storage> ambient: array<f32>;
-@group(3) @binding(5) var<storage> diffuse: array<f32>;
-@group(3) @binding(6) var<storage> specular: array<f32>;
+@group(3) @binding(4) var<uniform> ambient: array<vec3<f32>, 256>;
+@group(3) @binding(5) var<uniform> diffuse: array<vec3<f32>, 256>;
+@group(3) @binding(6) var<uniform> specular: array<vec3<f32>, 256>;
 @group(3) @binding(7) var<uniform> sizes: SceneGeometrySizes;
 
 fn world_pos_from_camera_space(camera_space: vec3<f32>) -> vec3<f32> {
@@ -222,30 +223,6 @@ fn bsdf_eval_phong(m_d: vec3<f32>, m_s: vec3<f32>, m_n: f32,
     return m_d / PI + m_s * (n + 2) / (2 * PI) * pow(dot(ideal, w_o), m_n);
 }
 
-fn get_ambient(index: u32) -> vec3<f32> {
-    return vec3(
-        ambient[3 * index],
-        ambient[3 * index + 1],
-        ambient[3 * index + 2],
-    );
-}
-
-fn get_diffuse(index: u32) -> vec3<f32> {
-    return vec3(
-        diffuse[3 * index],
-        diffuse[3 * index + 1],
-        diffuse[3 * index + 2],
-    );
-}
-
-fn get_specular(index: u32) -> vec3<f32> {
-    return vec3(
-        specular[3 * index],
-        specular[3 * index + 1],
-        specular[3 * index + 2],
-    );
-}
-
 var<workgroup> wg_rays: array<Ray, 256>;
 var<workgroup> wg_num_rays: atomic<u32>;
 var<workgroup> wg_ray_buffer_start: u32;
@@ -271,8 +248,8 @@ fn handle_intersections(
         const alpha = 0.6;
         let xi = pcg_next_f32(&pcg);
         if xi <= alpha {
-            let m_d = get_diffuse(mat_idx);
-            let m_s = get_specular(mat_idx);
+            let m_d = diffuse[mat_idx];
+            let m_s = specular[mat_idx];
 
             let sample = pcg_next_square(&pcg);
             let w_o = bsdf_sample_phong(sample, isec.w_i, isec.n);
@@ -291,7 +268,7 @@ fn handle_intersections(
         }
 
         let primary = primary_rays[isec.primary_ray];
-        let m_a = get_ambient(mat_idx);
+        let m_a = ambient[mat_idx];
         let result_color = &primary_rays[isec.primary_ray].result_color;
         let delta = m_a * isec.weight * dot(isec.w_i, isec.n);
         (*result_color).r += delta.r;

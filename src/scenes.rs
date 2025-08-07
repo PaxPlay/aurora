@@ -630,6 +630,12 @@ impl SceneGeometry {
             specular.extend(material.specular.unwrap_or([0f32, 0f32, 0f32]));
         }
 
+        let vertices = Self::pad_array_to_vec4(&vertices, 0.0).unwrap();
+        //        let indices = Self::pad_array_to_vec4(&indices, 0).unwrap();
+        let ambient = Self::pad_array_to_vec4(&ambient, 0.0).unwrap();
+        let diffuse = Self::pad_array_to_vec4(&diffuse, 0.0).unwrap();
+        let specular = Self::pad_array_to_vec4(&specular, 0.0).unwrap();
+
         Self {
             vertices,
             indices,
@@ -639,6 +645,25 @@ impl SceneGeometry {
             diffuse,
             specular,
         }
+    }
+
+    fn pad_array_to_vec4<T: Copy>(values: &[T], fill_value: T) -> Result<Vec<T>, ()> {
+        if values.len() % 3 != 0 {
+            return Err(());
+        }
+        let n = values.len() / 3;
+        let mut res = Vec::with_capacity(4 * n);
+
+        for i in 0..n {
+            res.extend(&[
+                values[3 * i],
+                values[3 * i + 1],
+                values[3 * i + 2],
+                fill_value,
+            ]);
+        }
+
+        Ok(res)
     }
 }
 
@@ -717,7 +742,7 @@ impl GpuSceneGeometry {
             .add_buffer(
                 0, // vertices
                 wgpu::ShaderStages::all(),
-                wgpu::BufferBindingType::Storage { read_only: true },
+                wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 1, // indices
@@ -737,17 +762,17 @@ impl GpuSceneGeometry {
             .add_buffer(
                 4, // ambient
                 wgpu::ShaderStages::all(),
-                wgpu::BufferBindingType::Storage { read_only: true },
+                wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 5, // diffuse
                 wgpu::ShaderStages::all(),
-                wgpu::BufferBindingType::Storage { read_only: true },
+                wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 6, // specular
                 wgpu::ShaderStages::all(),
-                wgpu::BufferBindingType::Storage { read_only: true },
+                wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 7, // sizes

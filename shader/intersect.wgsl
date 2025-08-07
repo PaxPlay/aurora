@@ -48,13 +48,14 @@ struct SceneGeometrySizes {
     diffuse: u32,
     specular: u32,
 };
-@group(3) @binding(0) var<storage> vertices: array<f32>;
+
+@group(3) @binding(0) var<uniform> vertices: array<vec3<f32>, 256>;
 @group(3) @binding(1) var<storage> indices: array<u32>;
 @group(3) @binding(2) var<storage> model_start_indices: array<u32>;
 @group(3) @binding(3) var<storage> material_indices: array<u32>;
-@group(3) @binding(4) var<storage> ambient: array<f32>;
-@group(3) @binding(5) var<storage> diffuse: array<f32>;
-@group(3) @binding(6) var<storage> specular: array<f32>;
+@group(3) @binding(4) var<uniform> ambient: array<vec3<f32>, 256>;
+@group(3) @binding(5) var<uniform> diffuse: array<vec3<f32>, 256>;
+@group(3) @binding(6) var<uniform> specular: array<vec3<f32>, 256>;
 @group(3) @binding(7) var<uniform> sizes: SceneGeometrySizes;
 
 @compute
@@ -77,13 +78,10 @@ fn intersect_rays(
     let ray = rays[gid.x];
 
     let num_triangles = sizes.indices / 3;
+
     if lidx < (num_triangles * 3) {
         let idx = indices[lidx];
-        local_vertices[lidx] = vec3<f32>(
-            vertices[idx * 3],
-            vertices[idx * 3 + 1],
-            vertices[idx * 3 + 2],
-        );
+        local_vertices[lidx] = vertices[idx];
     }
 
     workgroupBarrier();
