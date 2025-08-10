@@ -13,7 +13,7 @@ jobs:
         uses: actions/configure-pages@v5
       - uses: jetli/trunk-action@v0.5.1
         with:
-          version: 'latest'
+          version: "latest"
       - run: rustup target add wasm32-unknown-unknown
       - name: Cache
         uses: actions/cache@v4
@@ -23,11 +23,11 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - run: trunk build --public-url ./ --example pathtracer
+      - run: trunk build --public-url ./ --release --example pathtracer
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'dist'
+          path: "dist"
 
   deploy-pages:
     permissions:

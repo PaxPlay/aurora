@@ -562,16 +562,11 @@ impl SceneGeometry {
         use tobj::futures::*;
         use tobj::LoadError as LE;
 
-        let location = 
-            web_sys::window()
-                .expect("should have a window")
-                .location();
+        let location = web_sys::window().expect("should have a window").location();
         let base_url = format!(
             "{}{}{base_url}",
-                location.origin()
-                .expect("should have an origin"),
-                location.pathname().unwrap_or("/".to_string()),
-
+            location.origin().expect("should have an origin"),
+            location.pathname().unwrap_or("/".to_string()),
         );
 
         let obj_bytes = Self::load_file_from_network(&format!("{base_url}/{obj_file}"))
@@ -967,6 +962,12 @@ impl Scene for BasicScene3d {
                     ui.selectable_value(&mut self.current_view, name.clone(), name.as_str());
                 }
             });
+
+        self.views
+            .get(&self.current_view)
+            .expect("Selected view does not exist.")
+            .borrow_mut()
+            .draw_ui(ui);
     }
 }
 
@@ -981,6 +982,8 @@ pub trait Scene3dView {
     fn copy(&mut self, _gpu: Arc<GpuContext>) -> Option<wgpu::CommandBuffer> {
         None
     }
+
+    fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
 }
 
 struct WireframeView {

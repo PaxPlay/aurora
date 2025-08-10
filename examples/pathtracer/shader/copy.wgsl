@@ -52,18 +52,18 @@ fn copy_target(
     }
 
     let index = camera.resolution.x * gid.y + gid.x;
-    var color = primary_rays[index].result_color;
-    color += primary_rays[index].accumulated_color;
-    primary_rays[index].accumulated_color = color;
+    var result_color = max(primary_rays[index].result_color, vec4(0.0f));
+    var accumulated_color = max(primary_rays[index].accumulated_color, vec4(0.0f));
+    accumulated_color = accumulated_color + result_color;
+    primary_rays[index].accumulated_color = accumulated_color;
 
-    color /= color.a;
+    accumulated_color /= accumulated_color.a;
 
-    output_buffer_f32[4 * index    ] = color.r;
-    output_buffer_f32[4 * index + 1] = color.g;
-    output_buffer_f32[4 * index + 2] = color.b;
-    output_buffer_f32[4 * index + 3] = color.a;
+    output_buffer_f32[4 * index    ] = accumulated_color.r;
+    output_buffer_f32[4 * index + 1] = accumulated_color.g;
+    output_buffer_f32[4 * index + 2] = accumulated_color.b;
+    output_buffer_f32[4 * index + 3] = accumulated_color.a;
 
-    output_buffer_f16[2 * index    ] = pack2x16float(color.rg);
-    output_buffer_f16[2 * index + 1] = pack2x16float(color.ba);
+    output_buffer_f16[2 * index    ] = pack2x16float(accumulated_color.rg);
+    output_buffer_f16[2 * index + 1] = pack2x16float(accumulated_color.ba);
 }
-

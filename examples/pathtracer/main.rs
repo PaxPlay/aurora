@@ -518,4 +518,8 @@ impl Scene3dView for PathTracerView {
 
         ce.finish()
     }
+
+    fn draw_ui(&mut self, ui: &mut egui::Ui) {
+        self.should_clear |= ui.button("Clear Buffer").clicked();
+    }
 }
