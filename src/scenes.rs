@@ -562,13 +562,16 @@ impl SceneGeometry {
         use tobj::futures::*;
         use tobj::LoadError as LE;
 
-        let base_url = format!(
-            "{}/{base_url}",
+        let location = 
             web_sys::window()
                 .expect("should have a window")
-                .location()
-                .origin()
-                .expect("should have an origin")
+                .location();
+        let base_url = format!(
+            "{}{}{base_url}",
+                location.origin()
+                .expect("should have an origin"),
+                location.pathname().unwrap_or("/".to_string()),
+
         );
 
         let obj_bytes = Self::load_file_from_network(&format!("{base_url}/{obj_file}"))
