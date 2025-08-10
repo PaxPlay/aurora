@@ -19,12 +19,12 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'dist'
-  deploy:
+  deploy-pages:
     environment:
       name: github-pages
       url: ${{steps.deployment.outputs.page_url}}
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-trunk-pathtracer
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
