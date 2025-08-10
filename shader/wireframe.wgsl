@@ -15,15 +15,15 @@ struct CameraBuffer {
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraBuffer;
-@group(0) @binding(1) var<storage, read> vertices: array<f32>;
+@group(0) @binding(1) var<storage, read> vertices: array<vec3<f32>>;
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
 
 @vertex
 fn vs_main(
     @builtin(vertex_index) index: u32,
 ) -> VertexOutput {
-    var i = 3 * indices[index];
-    var pos = vec3(vertices[i], vertices[i + 1], vertices[i + 2]);
+    var i = indices[index];
+    var pos = vertices[i];
 
     var bary_coord: vec3<f32> = vec3(0);
     bary_coord[index % 3] = 1;
