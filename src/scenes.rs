@@ -684,9 +684,11 @@ impl GpuSceneGeometry {
     pub fn from(scene_geometry: &SceneGeometry, gpu: Arc<GpuContext>) -> Self {
         use wgpu::BufferUsages as BU;
 
-        let vertices = gpu.create_buffer_init(
+        let vertices = gpu.create_buffer_init_padded(
             "aurora_scene_vertices",
             &scene_geometry.vertices,
+            256 * 4,
+            0.0,
             BU::VERTEX | BU::STORAGE | BU::UNIFORM,
         );
 
@@ -708,21 +710,27 @@ impl GpuSceneGeometry {
             BU::STORAGE | BU::UNIFORM,
         );
 
-        let ambient = gpu.create_buffer_init(
+        let ambient = gpu.create_buffer_init_padded(
             "aurora_scene_ambient",
             &scene_geometry.ambient,
+            256 * 4,
+            0.0,
             BU::STORAGE | BU::UNIFORM,
         );
 
-        let diffuse = gpu.create_buffer_init(
+        let diffuse = gpu.create_buffer_init_padded(
             "aurora_scene_diffuse",
             &scene_geometry.diffuse,
+            256 * 4,
+            0.0,
             BU::STORAGE | BU::UNIFORM,
         );
 
-        let specular = gpu.create_buffer_init(
+        let specular = gpu.create_buffer_init_padded(
             "aurora_scene_specular",
             &scene_geometry.specular,
+            256 * 4,
+            0.0,
             BU::STORAGE | BU::UNIFORM,
         );
 
@@ -820,6 +828,7 @@ pub struct CameraBuffer {
     up: Vec4,
     resolution: UVec2,
     fov: f32,
+    _empty: u32,
 }
 
 impl CameraBuffer {
@@ -854,6 +863,7 @@ impl CameraBuffer {
             up: angle.up().extend(0.0f32),
             resolution: UVec2::from_array(resolution),
             fov,
+            _empty: 0,
         }
     }
 }

@@ -23,7 +23,7 @@ use wgpu::Extent3d;
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 
-use log::{debug, error, info};
+use log::{error, info};
 
 use clap::Parser;
 
@@ -335,12 +335,18 @@ impl GpuContext {
             }
         }
 
+        let limits = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 10,
+            max_compute_workgroup_storage_size: 32768,
+            ..Default::default()
+        };
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
                     required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
-                    required_limits: wgpu::Limits::default(),
+                    required_limits: limits,
                     ..Default::default()
                 },
                 None,
@@ -356,6 +362,17 @@ impl GpuContext {
             queue,
             shaders,
         })
+    }
+
+    pub fn create_buffer_init_padded<T: bytemuck::Pod>(
+        &self,
+        label: &str,
+        data: &[T],
+        size: usize,
+        value: T,
+        usage: wgpu::BufferUsages,
+    ) -> Buffer<T> {
+        Buffer::from_data_padded(self, label, data, size, value, usage)
     }
 
     pub fn create_buffer_init<T: bytemuck::Pod>(
@@ -454,7 +471,13 @@ impl AuroraWindow {
         render_target: Arc<RenderTarget>,
         event_loop: &ActiveEventLoop,
     ) -> Result<Self, NewWindowResult> {
-        let mut attributes = winit::window::WindowAttributes::default().with_title("Aurora");
+        let mut attributes = winit::window::WindowAttributes::default();
+        attributes = attributes.with_title("Aurora");
+
+        #[cfg(target_arch = "wasm32")]
+        const WINDOW_SIZE: winit::dpi::PhysicalSize<u32> =
+            winit::dpi::PhysicalSize::new(1024, 1024);
+
         #[cfg(target_arch = "wasm32")]
         {
             use winit::platform::web::WindowAttributesExtWebSys;
@@ -468,7 +491,9 @@ impl AuroraWindow {
                 .ok_or(HTMLNF(format!("canvas - {CANVAS_ID}")))?;
             let html_canvas_element = canvas.unchecked_into();
 
-            attributes = attributes.with_canvas(Some(html_canvas_element));
+            attributes = attributes
+                .with_canvas(Some(html_canvas_element))
+                .with_inner_size(WINDOW_SIZE);
         }
 
         let window = Arc::new(event_loop.create_window(attributes)?);
@@ -482,9 +507,11 @@ impl AuroraWindow {
             .find(|c| c.is_srgb())
             .unwrap_or(capabilities.formats[0]);
 
-        debug!(target: "aurora", "Selected surface format for main window: {surface_format:?}");
-
+        #[cfg(not(target_arch = "wasm32"))]
         let size = window.inner_size();
+        #[cfg(target_arch = "wasm32")]
+        let size = WINDOW_SIZE;
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,

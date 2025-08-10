@@ -32,29 +32,37 @@ struct RayIntersectionData {
     primary_ray: u32,
 }
 
-struct Schedule {
+struct InvocationSchedule {
     ray_intersection_groups: vec4<u32>,
     handle_intersections_groups: vec4<u32>,
+}
+
+struct ScheduleShade {
     num_rays: atomic<u32>,
     num_nee_rays: atomic<u32>,
+    shade_invocations: u32,
+    rng_seed_index: u32,
+}
+
+struct ScheduleIntersect {
     num_intersections: atomic<u32>,
     num_misses: atomic<u32>,
+    intersect_invocations: u32,
     rng_seed_index: u32,
 }
 
 const F32_MAX: f32 = 3.4028e38;
-const EPSILON: f32 = 1e-10;
+const EPSILON: f32 = 1e-4;
+const PI: f32 = 3.14159265359;
 
 @group(0) @binding(0) var<uniform> camera : CameraBuffer;
 
 @group(1) @binding(0) var<storage, read_write> primary_rays : array<PrimaryRayData>;
 @group(1) @binding(1) var<storage, read_write> rays : array<Ray>;
 @group(1) @binding(2) var<storage, read_write> ray_intersections: array<RayIntersectionData>;
-@group(1) @binding(3) var<storage, read_write> schedule: Schedule;
-@group(1) @binding(4) var<storage, read> rng_seeds: array<u32>;
+@group(1) @binding(3) var<storage, read> rng_seeds: array<u32>;
 
-@group(2) @binding(0) var<storage, read_write> output_buffer_f32: array<f32>; 
-@group(2) @binding(1) var<storage, read_write> output_buffer_f16: array<u32>; // pack with pack2x16float
+@group(2) @binding(0) var<storage, read_write> schedule: ScheduleShade;
 
 struct SceneGeometrySizes {
     vertices: u32,
@@ -74,86 +82,6 @@ struct SceneGeometrySizes {
 @group(3) @binding(5) var<uniform> diffuse: array<vec3<f32>, 256>;
 @group(3) @binding(6) var<uniform> specular: array<vec3<f32>, 256>;
 @group(3) @binding(7) var<uniform> sizes: SceneGeometrySizes;
-
-fn world_pos_from_camera_space(camera_space: vec3<f32>) -> vec3<f32> {
-    let world_pos = camera.vp_inv * vec4(camera_space, 1.0);
-    return world_pos.xyz / world_pos.w;
-}
-
-@compute
-@workgroup_size(1, 1, 1)
-fn schedule_invocations(
-) {
-    let num_rays = atomicLoad(&schedule.num_rays);
-    schedule.ray_intersection_groups = vec4<u32>(
-        (num_rays + 127) / 128,
-        1,
-        1,
-        num_rays,
-    );
-
-    let num_intersections = atomicLoad(&schedule.num_intersections);
-    schedule.handle_intersections_groups = vec4<u32>(
-        (num_intersections + 255) / 256,
-        1,
-        1,
-        num_intersections,
-    );
-
-    atomicStore(&schedule.num_rays, 0u);
-    atomicStore(&schedule.num_nee_rays, 0u);
-    atomicStore(&schedule.num_intersections, 0u);
-    atomicStore(&schedule.num_misses, 0u);
-
-    schedule.rng_seed_index += 1;
-}
-
-@compute
-@workgroup_size(16, 16, 1)
-fn generate_rays(
-    @builtin(global_invocation_id) gid: vec3<u32>
-) {
-    var screen_pos = (vec2<f32>(gid.xy) + vec2<f32>(0.5, 0.5)) / vec2<f32>(camera.resolution);
-    screen_pos.y = 1.0 - screen_pos.y;
-    let world_pos = world_pos_from_camera_space(vec3(screen_pos * 2.0 - vec2(1.0), 0.0));
-    let direction = normalize(world_pos - camera.origin);
-    var ray_data: PrimaryRayData;
-    ray_data.origin = camera.origin;
-    ray_data.direction = direction;
-    ray_data.result_color = vec4(0.0);
-
-    if gid.x < camera.resolution.x && gid.y < camera.resolution.y {
-        let idx = camera.resolution.x * gid.y + gid.x;
-
-        primary_rays[idx].origin = ray_data.origin;
-        primary_rays[idx].direction = ray_data.direction;
-        primary_rays[idx].result_color = ray_data.result_color;
-
-        var ray: Ray;
-        ray.origin = ray_data.origin;
-        ray.direction = ray_data.direction;
-        ray.primary_ray = idx;
-        ray.weight = vec3<f32>(1.0);
-        rays[idx] = ray;
-    }
-
-    if gid.x == 0 && gid.y == 0 {
-        let num_rays = camera.resolution.x * camera.resolution.y;
-        atomicStore(&schedule.num_rays, 0u);
-        atomicStore(&schedule.num_nee_rays, 0u);
-        atomicStore(&schedule.num_intersections, 0u);
-        atomicStore(&schedule.num_misses, 0u);
-
-        schedule.ray_intersection_groups = vec4<u32>(
-            (num_rays + 127) / 128,
-            1,
-            1,
-            num_rays,
-        );
-
-        schedule.rng_seed_index = 0;
-    }
-}
 
 struct PCG {
     state: u32,
@@ -184,8 +112,6 @@ fn pcg_next_f32(pcg: ptr<function, PCG>) -> f32 {
 fn pcg_next_square(pcg: ptr<function, PCG>) -> vec2<f32> {
     return vec2(pcg_next_f32(pcg), pcg_next_f32(pcg));
 }
-
-const PI: f32 = 3.14159265359;
 
 fn warp_square_to_hemisphere(sample: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
     let cosTheta = sample.x;
@@ -239,7 +165,7 @@ fn handle_intersections(
 
     var pcg: PCG = pcg_seed(rng_seeds[schedule.rng_seed_index], gid.x);
 
-    let total_num_intersections = schedule.handle_intersections_groups.w;
+    let total_num_intersections = schedule.shade_invocations;
     if gid.x < total_num_intersections {
         let isec = ray_intersections[gid.x];
         let mat_idx = material_indices[isec.surface_id];
@@ -258,7 +184,7 @@ fn handle_intersections(
             
             let weight = isec.weight * f / pdf / alpha * dot(isec.n, w_o);
             var secondary_ray: Ray;
-            secondary_ray.origin = isec.pos + 0.0001 * w_o;
+            secondary_ray.origin = isec.pos + EPSILON * w_o;
             secondary_ray.direction = w_o;
             secondary_ray.weight = weight;
             secondary_ray.primary_ray = isec.primary_ray;
@@ -286,33 +212,8 @@ fn handle_intersections(
 
     workgroupBarrier();
 
-    if lidx < wg_num_rays {
+    if lidx < atomicLoad(&wg_num_rays) {
         rays[wg_ray_buffer_start + lidx] = wg_rays[lidx];
     }
-}
-
-@compute
-@workgroup_size(16, 16, 1)
-fn copy_target(
-    @builtin(global_invocation_id) gid: vec3<u32>
-) {
-    if gid.x >= camera.resolution.x || gid.y >= camera.resolution.y {
-        return;
-    }
-
-    let index = camera.resolution.x * gid.y + gid.x;
-    var color = primary_rays[index].result_color;
-    color += primary_rays[index].accumulated_color;
-    primary_rays[index].accumulated_color = color;
-
-    color /= color.a;
-
-    output_buffer_f32[4 * index    ] = color.r;
-    output_buffer_f32[4 * index + 1] = color.g;
-    output_buffer_f32[4 * index + 2] = color.b;
-    output_buffer_f32[4 * index + 3] = color.a;
-
-    output_buffer_f16[2 * index    ] = pack2x16float(color.rg);
-    output_buffer_f16[2 * index + 1] = pack2x16float(color.ba);
 }
 

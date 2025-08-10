@@ -1,6 +1,7 @@
 use crate::shader::ComputePipeline;
 use crate::GpuContext;
 use crate::{compute_pipeline, register_default};
+use log::error;
 use std::marker::PhantomData;
 use std::num::NonZero;
 use wgpu::util::DeviceExt;
@@ -9,10 +10,25 @@ use wgpu::util::DeviceExt;
 pub struct Buffer<T: bytemuck::Pod> {
     pub buffer: wgpu::Buffer,
     pub size: NonZero<usize>,
+    label: String,
     phantom: PhantomData<T>,
 }
 
 impl<T: bytemuck::Pod> Buffer<T> {
+    pub fn from_data_padded(
+        gpu: &GpuContext,
+        label: &str,
+        data: &[T],
+        size: usize,
+        value: T,
+        usage: wgpu::BufferUsages,
+    ) -> Self {
+        let mut new_data: Vec<T> = Vec::with_capacity(size);
+        new_data.extend_from_slice(data);
+        new_data.resize(size, value);
+        Self::from_data(gpu, label, &new_data, usage)
+    }
+
     pub fn from_data(gpu: &GpuContext, label: &str, data: &[T], usage: wgpu::BufferUsages) -> Self {
         let buffer = gpu
             .device
@@ -25,6 +41,7 @@ impl<T: bytemuck::Pod> Buffer<T> {
         Self {
             buffer,
             size: NonZero::new(size_of_val(data)).unwrap(),
+            label: label.to_string(),
             phantom: PhantomData,
         }
     }
@@ -40,11 +57,15 @@ impl<T: bytemuck::Pod> Buffer<T> {
         Self {
             buffer,
             size: NonZero::new(size).unwrap(),
+            label: label.to_string(),
             phantom: PhantomData,
         }
     }
 
     pub fn write(&self, ctx: &mut BufferCopyContext, data: &[T]) {
+        // extra cast to u8 to avoid alignment issues, might perform worse...
+        let data_cast: &[u8] = bytemuck::cast_slice(data);
+
         let mut buffer_view = ctx.staging_belt.write_buffer(
             &mut ctx.command_encoder,
             &self.buffer,
@@ -53,8 +74,12 @@ impl<T: bytemuck::Pod> Buffer<T> {
             ctx.device,
         );
 
-        let content: &mut [T] = bytemuck::cast_slice_mut(&mut buffer_view);
-        content.copy_from_slice(data);
+        let res: Result<&mut [u8], _> = bytemuck::try_cast_slice_mut(&mut buffer_view);
+        if let Ok(content) = res {
+            content.copy_from_slice(data_cast);
+        } else {
+            error!(target: "aurora::buffers", "Failed writing buffer {}: {}", self.label, res.err().unwrap());
+        }
     }
 }
 
