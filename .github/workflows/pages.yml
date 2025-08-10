@@ -23,7 +23,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - run: trunk build --example pathtracer
+      - run: trunk build --public-url ./ --example pathtracer
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
