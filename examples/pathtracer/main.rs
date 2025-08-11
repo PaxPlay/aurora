@@ -5,6 +5,7 @@ use aurora::{
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
     Aurora, GpuContext,
 };
+use exr::prelude::WritableImage;
 use rand::Rng;
 use std::sync::Arc;
 
@@ -65,6 +66,7 @@ impl ImageStorageBuffer {
 }
 
 struct PathTracerView {
+    gpu: Arc<GpuContext>,
     schedule_pipeline: ComputePipeline,
     ray_generation_pipeline: ComputePipeline,
     ray_intersection_pipeline: ComputePipeline,
@@ -345,6 +347,7 @@ impl PathTracerView {
         });
 
         Self {
+            gpu,
             schedule_pipeline,
             ray_generation_pipeline,
             ray_intersection_pipeline,
@@ -402,6 +405,104 @@ impl PathTracerView {
                     .unwrap(),
             );
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_image<T>(image: exr::image::Image<T>)
+    where
+        T: for<'a> exr::image::write::layers::WritableLayers<'a>,
+    {
+        image
+            .write()
+            .to_file("image.exr")
+            .expect("Failed to write image to file");
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn write_image<T>(image: exr::image::Image<T>)
+    where
+        T: for<'a> exr::image::write::layers::WritableLayers<'a>,
+    {
+        use std::io::Cursor;
+        use web_sys::js_sys;
+        use web_sys::wasm_bindgen::JsCast;
+        use web_sys::{Blob, BlobPropertyBag, Document, HtmlAnchorElement, Url, Window};
+        let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+        image
+            .write()
+            .to_buffered(&mut data)
+            .expect("Failed to write image to buffer");
+
+        let uint8_array = js_sys::Uint8Array::from(data.into_inner().as_slice());
+        let array_for_blob = js_sys::Array::new();
+        array_for_blob.push(&uint8_array.into());
+        let blob =
+            Blob::new_with_u8_array_sequence(&array_for_blob).expect("failed to create blob");
+        let window: Window = web_sys::window().expect("window not found");
+        let url = Url::create_object_url_with_blob(&blob).expect("failed to create object URL");
+        let document: Document = window.document().expect("document not found");
+        let a: HtmlAnchorElement = document
+            .create_element("a")
+            .expect("failed to create anchor element")
+            .dyn_into::<HtmlAnchorElement>()
+            .expect("failed to cast to HtmlAnchorElement");
+        a.set_href(&url);
+        a.set_download("image.exr");
+        let body = document.body().expect("document body not found");
+        body.append_child(&a)
+            .expect("failed to append anchor element to body");
+        a.click();
+        body.remove_child(&a)
+            .expect("failed to remove anchor element");
+        Url::revoke_object_url(&url).expect("failed to revoke object URL");
+    }
+
+    fn screenshot(&self) {
+        let image = &self.image_f32;
+
+        use exr::meta::attribute::*;
+        use exr::prelude::*;
+        let resolution: (usize, usize) =
+            (image.resolution[0] as usize, image.resolution[1] as usize);
+
+        let mut layer_attributes = LayerAttributes::named("rgba main layer");
+
+        let buffer = image.pixel_buffer.as_ref().unwrap();
+
+        wgpu::util::DownloadBuffer::read_buffer(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &buffer.buffer.slice(..),
+            move |res| {
+                if let Ok(download_buffer) = res {
+                    let data: &[u8] = &download_buffer;
+                    let data_f32: &[f32] = bytemuck::try_cast_slice(data)
+                        .expect("Could not cast image data from u8 to f32");
+                    let data_vec: Vec<f32> = data_f32.to_vec();
+
+                    {
+                        let layer = Layer::new(
+                            resolution,
+                            layer_attributes,
+                            Encoding::FAST_LOSSLESS,
+                            SpecificChannels::rgba(move |pos: Vec2<usize>| {
+                                let index = pos.x() + pos.y() * resolution.0;
+                                let color: (f32, f32, f32, f32) = (
+                                    data_vec[4 * index],
+                                    data_vec[4 * index + 1],
+                                    data_vec[4 * index + 2],
+                                    data_vec[4 * index + 3],
+                                );
+                                color
+                            }),
+                        );
+
+                        let image = Image::from_layer(layer);
+                        Self::write_image(image);
+                    }
+                }
+            },
+        );
     }
 }
 
@@ -521,5 +622,8 @@ impl Scene3dView for PathTracerView {
 
     fn draw_ui(&mut self, ui: &mut egui::Ui) {
         self.should_clear |= ui.button("Clear Buffer").clicked();
+        if ui.button("Get Screenshot").clicked() {
+            self.screenshot();
+        }
     }
 }
