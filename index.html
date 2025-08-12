@@ -8,12 +8,25 @@
     canvas {
       background-color: black;
     }
+
+    div.aurora-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100vw;
+    }
+
+    body {
+      background-color: #102009;
+    }
   </style>
   <link data-trunk rel="copy-dir" href="models" />
 </head>
 
 <body>
-  <canvas id="aurora" width="600" height="400"></canvas>
+  <div class="aurora-container">
+    <canvas id="aurora"></canvas>
+  </div>
 </body>
 
 </html>

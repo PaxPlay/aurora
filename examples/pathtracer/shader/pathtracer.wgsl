@@ -143,10 +143,10 @@ fn bsdf_pdf_phong(w_o: vec3<f32>) -> f32 {
 }
 
 fn bsdf_eval_phong(m_d: vec3<f32>, m_s: vec3<f32>, m_n: f32,
-                   w_i: vec3<f32>, n: vec3<f32>, w_o: vec3<f32>) -> vec3<f32> {
+    w_i: vec3<f32>, n: vec3<f32>, w_o: vec3<f32>) -> vec3<f32> {
     let ideal = normalize(reflect(w_i, n));
 
-    return m_d / PI + m_s * (n + 2) / (2 * PI) * pow(dot(ideal, w_o), m_n);
+    return m_d / PI + m_s * ((n + 2.0) / (2.0 * PI)) * pow(max(dot(ideal, w_o), 0.0), m_n);
 }
 
 var<workgroup> wg_rays: array<Ray, 256>;
@@ -163,15 +163,15 @@ fn handle_intersections(
         atomicStore(&wg_num_rays, 0u);
     }
 
-    var pcg: PCG = pcg_seed(rng_seeds[schedule.rng_seed_index], gid.x);
-
     let total_num_intersections = schedule.shade_invocations;
     if gid.x < total_num_intersections {
         let isec = ray_intersections[gid.x];
         let mat_idx = material_indices[isec.surface_id];
+        var pcg: PCG = pcg_seed(rng_seeds[schedule.rng_seed_index], isec.primary_ray);
+
 
         // Russian Roulette
-        const alpha = 0.6;
+        const alpha = 0.8;
         let xi = pcg_next_f32(&pcg);
         if xi <= alpha {
             let m_d = diffuse[mat_idx];
@@ -180,27 +180,28 @@ fn handle_intersections(
             let sample = pcg_next_square(&pcg);
             let w_o = bsdf_sample_phong(sample, isec.w_i, isec.n);
             let pdf = bsdf_pdf_phong(w_o);
-            let f = bsdf_eval_phong(m_d, m_s, 0.0, isec.w_i, isec.n, w_o);
-            
+            let f = bsdf_eval_phong(m_d, m_s, 1.0, isec.w_i, isec.n, w_o);
+
             let weight = isec.weight * f / pdf / alpha * dot(isec.n, w_o);
             var secondary_ray: Ray;
             secondary_ray.origin = isec.pos + EPSILON * w_o;
             secondary_ray.direction = w_o;
             secondary_ray.weight = weight;
             secondary_ray.primary_ray = isec.primary_ray;
-            
+
             let ray_index = atomicAdd(&wg_num_rays, 1u);
             wg_rays[ray_index] = secondary_ray;
         }
 
         let primary = primary_rays[isec.primary_ray];
         let m_a = ambient[mat_idx];
-        let result_color = &primary_rays[isec.primary_ray].result_color;
+        var result_color = primary_rays[isec.primary_ray].result_color;
         let delta = m_a * isec.weight * dot(isec.w_i, isec.n);
-        (*result_color).r += delta.r;
-        (*result_color).g += delta.g;
-        (*result_color).b += delta.b;
-        (*result_color).a = 1.0f;
+        result_color = max(result_color, vec4(0.0f));
+        primary_rays[isec.primary_ray].result_color = vec4(
+            delta + result_color.rgb,
+            1.0f
+        );
     }
 
     // write back rays into ray buffer

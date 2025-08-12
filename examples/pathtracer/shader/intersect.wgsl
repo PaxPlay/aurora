@@ -132,8 +132,9 @@ fn intersect_rays(
                 isec.pos = ray.origin + t * ray.direction;
                 isec.surface_id = i;
                 isec.n = normalize(cross(e1, e2));
-                isec.w_i = -ray.direction;
+                isec.w_i = normalize(-ray.direction);
                 isec.weight = ray.weight;
+                isec.primary_ray = ray.primary_ray;
             }
         }
 

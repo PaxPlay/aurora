@@ -279,7 +279,12 @@ impl PathTracerView {
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout"),
-                    bind_group_layouts: &[&bgl_camera.get(), &bgl_rays.get(), &bgl_image.get()],
+                    bind_group_layouts: &[
+                        &bgl_camera.get(),
+                        &bgl_rays.get(),
+                        &bgl_image.get(),
+                        &bgl_schedule_invocations.get(),
+                    ],
                     push_constant_ranges: &[],
                 });
 
@@ -510,6 +515,8 @@ impl Scene3dView for PathTracerView {
     fn copy(&mut self, gpu: Arc<GpuContext>) -> Option<wgpu::CommandBuffer> {
         // rust is fun some times
         let seeds: Vec<_> = self.rng.clone().random_iter::<u32>().take(16).collect();
+        // let mut seeds: Vec<u32> = Vec::with_capacity(16);
+        // seeds.resize(16, 0);
 
         Some(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
             self.seed_buffer.write(ctx, &seeds);
@@ -554,7 +561,7 @@ impl Scene3dView for PathTracerView {
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);
 
-            for _ in 0..15 {
+            for _ in 0..10 {
                 // ray triangle intersections
                 compute_pass.set_bind_group(0, &self.bg_rays, &[]);
                 compute_pass.set_bind_group(1, &self.bg_schedule_intersect, &[]);
@@ -590,6 +597,7 @@ impl Scene3dView for PathTracerView {
             compute_pass.set_bind_group(0, &self.bg_camera, &[]);
             compute_pass.set_bind_group(1, &self.bg_rays, &[]);
             compute_pass.set_bind_group(2, self.bg_image.as_ref().unwrap(), &[]);
+            compute_pass.set_bind_group(3, &self.bg_schedule_invocations, &[]);
             compute_pass.set_pipeline(&self.target_pipeline.get());
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);
