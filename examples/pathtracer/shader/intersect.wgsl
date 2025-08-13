@@ -74,16 +74,16 @@ fn intersect_rays(
 ) {
     let num_rays = schedule.intersect_invocations;
 
-    if gid.x == 0 {
+    if gid.x == 0u {
         atomicStore(&wg_num_intersections, 0u);
         atomicStore(&wg_num_misses, 0u);
     }
 
     let ray = rays[gid.x];
 
-    let num_triangles = sizes.indices / 3;
+    let num_triangles = sizes.indices / 3u;
 
-    if lidx < (num_triangles * 3) {
+    if lidx < (num_triangles * 3u) {
         let idx = indices[lidx];
         local_vertices[lidx] = vertices[idx];
     }
@@ -92,15 +92,15 @@ fn intersect_rays(
 
     if gid.x < num_rays {
         var isec: RayIntersectionData;
-        isec.pos = vec3<f32>(-1, -1, -1);
+        isec.pos = vec3<f32>(-1.0, -1.0, -1.0);
         isec.t = F32_MAX;
         isec.primary_ray = ray.primary_ray;
 
         for (var i: u32; i < num_triangles; i++) {
             // https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
-            let a = local_vertices[3 * i];
-            let b = local_vertices[3 * i + 1];
-            let c = local_vertices[3 * i + 2];
+            let a = local_vertices[3u * i];
+            let b = local_vertices[3u * i + 1u];
+            let c = local_vertices[3u * i + 2u];
 
             let e1 = b - a;
             let e2 = c - a;
@@ -155,7 +155,7 @@ fn intersect_rays(
 
     // Sum up total intersections using global atomics
     // results of the atomics are the start indices in the respective buffers
-    if lidx == 0 {
+    if lidx == 0u {
         wg_isec_group_start = atomicAdd(&schedule.num_intersections,
             num_intersections);
         wg_miss_group_start = atomicAdd(&schedule.num_misses,

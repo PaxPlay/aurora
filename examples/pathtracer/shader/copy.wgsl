@@ -91,12 +91,12 @@ fn copy_target(
         // let index = isec.primary_ray;
         // let accumulated_color = vec4(abs(isec.n), 1.0);
 
-        output_buffer_f32[4 * index    ] = accumulated_color.r;
-        output_buffer_f32[4 * index + 1] = accumulated_color.g;
-        output_buffer_f32[4 * index + 2] = accumulated_color.b;
-        output_buffer_f32[4 * index + 3] = accumulated_color.a;
+        output_buffer_f32[4u * index     ] = accumulated_color.r;
+        output_buffer_f32[4u * index + 1u] = accumulated_color.g;
+        output_buffer_f32[4u * index + 2u] = accumulated_color.b;
+        output_buffer_f32[4u * index + 3u] = accumulated_color.a;
 
-        output_buffer_f16[2 * index    ] = pack2x16float(accumulated_color.rg);
-        output_buffer_f16[2 * index + 1] = pack2x16float(accumulated_color.ba);
+        output_buffer_f16[2u * index     ] = pack2x16float(accumulated_color.rg);
+        output_buffer_f16[2u * index + 1u] = pack2x16float(accumulated_color.ba);
     }
 }

@@ -96,7 +96,7 @@ fn generate_rays(
         rays[idx] = ray;
     }
 
-    if gid.x == 0 && gid.y == 0 {
+    if gid.x == 0u && gid.y == 0u {
         let num_rays = camera.resolution.x * camera.resolution.y;
         atomicStore(&schedule_shade.num_rays, 0u);
         atomicStore(&schedule_shade.num_nee_rays, 0u);
@@ -104,15 +104,15 @@ fn generate_rays(
         atomicStore(&schedule_intersect.num_misses, 0u);
 
         schedule.ray_intersection_groups = vec4<u32>(
-            (num_rays + 127) / 128,
-            1,
-            1,
+            (num_rays + 127u) / 128u,
+            1u,
+            1u,
             num_rays,
         );
         schedule_intersect.intersect_invocations = num_rays;
 
-        schedule_shade.rng_seed_index = 0;
-        schedule_intersect.rng_seed_index = 0;
+        schedule_shade.rng_seed_index = 0u;
+        schedule_intersect.rng_seed_index = 0u;
     }
 }
 

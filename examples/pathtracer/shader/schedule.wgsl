@@ -27,18 +27,18 @@ fn schedule_invocations(
 ) {
     let num_rays = atomicLoad(&schedule_shade.num_rays);
     schedule.ray_intersection_groups = vec4<u32>(
-        (num_rays + 127) / 128,
-        1,
-        1,
+        (num_rays + 127u) / 128u,
+        1u,
+        1u,
         num_rays,
     );
     schedule_intersect.intersect_invocations = num_rays;
 
     let num_intersections = atomicLoad(&schedule_intersect.num_intersections);
     schedule.handle_intersections_groups = vec4<u32>(
-        (num_intersections + 255) / 256,
-        1,
-        1,
+        (num_intersections + 255u) / 256u,
+        1u,
+        1u,
         num_intersections,
     );
     schedule_shade.shade_invocations = num_intersections;
@@ -48,7 +48,7 @@ fn schedule_invocations(
     atomicStore(&schedule_intersect.num_intersections, 0u);
     atomicStore(&schedule_intersect.num_misses, 0u);
 
-    schedule_intersect.rng_seed_index += 1;
-    schedule_shade.rng_seed_index += 1;
+    schedule_intersect.rng_seed_index += 1u;
+    schedule_shade.rng_seed_index += 1u;
 }
 

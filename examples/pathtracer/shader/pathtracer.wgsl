@@ -106,7 +106,7 @@ fn pcg_next_u32(pcg: ptr<function, PCG>) -> u32 {
 }
 
 fn pcg_next_f32(pcg: ptr<function, PCG>) -> f32 {
-    return bitcast<f32>((pcg_next_u32(pcg) >> 9) | 0x3f800000u) - 1.0f;
+    return bitcast<f32>((pcg_next_u32(pcg) >> 9u) | 0x3f800000u) - 1.0f;
 }
 
 fn pcg_next_square(pcg: ptr<function, PCG>) -> vec2<f32> {
@@ -115,7 +115,7 @@ fn pcg_next_square(pcg: ptr<function, PCG>) -> vec2<f32> {
 
 fn warp_square_to_hemisphere(sample: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
     let cosTheta = sample.x;
-    let sinTheta = sqrt(1 - cosTheta * cosTheta);
+    let sinTheta = sqrt(1.0 - cosTheta * cosTheta);
 
     let phi = 2.0 * PI * sample.y;
     let sinPhi = sin(phi);
@@ -127,7 +127,7 @@ fn warp_square_to_hemisphere(sample: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
         cosTheta,
     );
 
-    if dot(up_hemisphere, n) < 0 {
+    if dot(up_hemisphere, n) < 0.0 {
         return -1.0 * up_hemisphere;
     } else {
         return up_hemisphere;
@@ -139,7 +139,7 @@ fn bsdf_sample_phong(sample: vec2<f32>, w_i: vec3<f32>, n: vec3<f32>) -> vec3<f3
 }
 
 fn bsdf_pdf_phong(w_o: vec3<f32>) -> f32 {
-    return 1 / (2 * PI);
+    return 1.0 / (2.0 * PI);
 }
 
 fn bsdf_eval_phong(m_d: vec3<f32>, m_s: vec3<f32>, m_n: f32,
@@ -159,7 +159,7 @@ fn handle_intersections(
     @builtin(global_invocation_id) gid: vec3<u32>,
     @builtin(local_invocation_index) lidx: u32
 ) {
-    if lidx == 0 {
+    if lidx == 0u {
         atomicStore(&wg_num_rays, 0u);
     }
 
@@ -207,7 +207,7 @@ fn handle_intersections(
     // write back rays into ray buffer
     workgroupBarrier();
 
-    if lidx == 0 {
+    if lidx == 0u {
         wg_ray_buffer_start = atomicAdd(&schedule.num_rays, atomicLoad(&wg_num_rays));
     }
 
