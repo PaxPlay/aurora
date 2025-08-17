@@ -1,0 +1,13 @@
+[package]
+name = "wgsl_preprocessor"
+version = "0.1.0"
+edition = "2021"
+description = "WGSL preprocessor with #include and #define support"
+license = "MIT"
+
+[dependencies]
+regex = "1.10"
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.8"

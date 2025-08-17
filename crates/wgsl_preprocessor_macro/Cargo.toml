@@ -1,0 +1,18 @@
+[package]
+name = "wgsl_preprocessor_macro"
+version = "0.1.0"
+edition = "2021"
+description = "Procedural macros for WGSL preprocessor"
+license = "MIT"
+
+[dependencies]
+wgsl_preprocessor = { path = "../wgsl_preprocessor" }
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+
+[lib]
+proc-macro = true
+
+[dev-dependencies]
+tempfile = "3.8"

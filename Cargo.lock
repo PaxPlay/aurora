@@ -202,6 +202,8 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
+ "wgsl_preprocessor",
+ "wgsl_preprocessor_macro",
  "winit",
 ]
 
@@ -3436,6 +3438,24 @@ dependencies = [
  "js-sys",
  "log",
  "web-sys",
+]
+
+[[package]]
+name = "wgsl_preprocessor"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "wgsl_preprocessor_macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "wgsl_preprocessor",
 ]
 
 [[package]]
