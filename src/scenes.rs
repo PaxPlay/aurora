@@ -9,6 +9,7 @@ use crate::{register_default, render_pipeline, DebugUi, GpuContext, RenderTarget
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::f32::consts::*;
+use std::ops::DerefMut;
 use std::sync::Arc;
 
 pub trait Scene {
@@ -537,65 +538,21 @@ pub struct SceneGeometry {
 }
 
 impl SceneGeometry {
-    #[cfg(target_arch = "wasm32")]
-    async fn load_file_from_network(url: &str) -> Result<bytes::Bytes, reqwest::Error> {
-        /*
-        use web_sys::{Request, RequestInit, Response};
-        let opts = RequestInit::new();
-        opts.set_method("GET");
-
-        // oh what fun ._.
-        let request = Request::new_with_str_and_init(&url, &opts)?;
-        let window = web_sys::window().unwrap();
-        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await?;
-        let resp: Response = resp_value.dyn_into()?;
-        let buffer_value = JsFuture::from(resp.array_buffer()?).await?;
-
-        Ok(js_sys::Uint8Array::new(&buffer_value))
-        */
-        reqwest::get(url).await?.bytes().await
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    async fn load_from_network(base_url: &str, obj_file: &str) -> tobj::LoadResult {
-        use futures::io::Cursor;
-        use tobj::futures::*;
-        use tobj::LoadError as LE;
-
-        let location = web_sys::window().expect("should have a window").location();
-        let base_url = format!(
-            "{}{}{base_url}",
-            location.origin().expect("should have an origin"),
-            location.pathname().unwrap_or("/".to_string()),
-        );
-
-        let obj_bytes = Self::load_file_from_network(&format!("{base_url}/{obj_file}"))
-            .await
-            .unwrap();
-        //            .map_err(|_| LE::ReadError)?;
-
-        let mut reader = Cursor::new(obj_bytes);
-
-        load_obj_buf(&mut reader, &tobj::GPU_LOAD_OPTIONS, async |path| {
-            let path = format!("{base_url}/{}", path.display());
-            let mtl_bytes = Self::load_file_from_network(&path)
-                .await
-                .map_err(|_| LE::ReadError)?;
-            let mut mtl_reader = Cursor::new(mtl_bytes);
-            load_mtl_buf(&mut mtl_reader).await
-        })
-        .await
-    }
-
-    pub async fn new(file: &str) -> Self {
+    pub async fn new(file: &str, gpu: Arc<GpuContext>) -> Self {
         info!(target: "aurora", "Loading scene geometry from file \"{file}\"");
-        cfg_if::cfg_if! {
-            if #[cfg(target_arch = "wasm32")] {
-                let load_result = Self::load_from_network("models", file).await;
-            } else {
-                let load_result = tobj::load_obj(format!("models/{file}"), &tobj::GPU_LOAD_OPTIONS);
-            }
-        }
+
+        let mut obj_data = gpu
+            .filesystem
+            .create_reader(&format!("models/{file}"))
+            .await;
+        let load_result =
+            tobj::futures::load_obj_buf(&mut obj_data, &tobj::GPU_LOAD_OPTIONS, async |path| {
+                let file = format!("models/{}", path.display());
+                let mut file = gpu.filesystem.create_reader(&file).await;
+                tobj::futures::load_mtl_buf(&mut file).await
+            })
+            .await;
+
         let (models, materials) =
             load_result.expect(format!("Unable to load obj file for {}", file).as_str());
         let materials = materials.expect("Materials are missing");

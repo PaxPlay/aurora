@@ -5,9 +5,8 @@ use aurora::{
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
     Aurora, GpuContext,
 };
-use exr::prelude::WritableImage;
 use rand::Rng;
-use std::sync::Arc;
+use std::{ops::DerefMut, sync::Arc};
 
 fn main() {
     cfg_if::cfg_if! {
@@ -23,7 +22,7 @@ fn main() {
 
 async fn main_async() {
     let mut aurora = Aurora::new().await.unwrap();
-    let scene_geometry = SceneGeometry::new("cornell_box.obj").await;
+    let scene_geometry = SceneGeometry::new("cornell_box.obj", aurora.get_gpu()).await;
     let mut scene = BasicScene3d::new(scene_geometry, aurora.get_gpu(), aurora.get_target());
     scene.add_view(
         "path_tracer",
@@ -412,56 +411,6 @@ impl PathTracerView {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn write_image<T>(image: exr::image::Image<T>)
-    where
-        T: for<'a> exr::image::write::layers::WritableLayers<'a>,
-    {
-        image
-            .write()
-            .to_file("image.exr")
-            .expect("Failed to write image to file");
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn write_image<T>(image: exr::image::Image<T>)
-    where
-        T: for<'a> exr::image::write::layers::WritableLayers<'a>,
-    {
-        use std::io::Cursor;
-        use web_sys::js_sys;
-        use web_sys::wasm_bindgen::JsCast;
-        use web_sys::{Blob, BlobPropertyBag, Document, HtmlAnchorElement, Url, Window};
-        let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        image
-            .write()
-            .to_buffered(&mut data)
-            .expect("Failed to write image to buffer");
-
-        let uint8_array = js_sys::Uint8Array::from(data.into_inner().as_slice());
-        let array_for_blob = js_sys::Array::new();
-        array_for_blob.push(&uint8_array.into());
-        let blob =
-            Blob::new_with_u8_array_sequence(&array_for_blob).expect("failed to create blob");
-        let window: Window = web_sys::window().expect("window not found");
-        let url = Url::create_object_url_with_blob(&blob).expect("failed to create object URL");
-        let document: Document = window.document().expect("document not found");
-        let a: HtmlAnchorElement = document
-            .create_element("a")
-            .expect("failed to create anchor element")
-            .dyn_into::<HtmlAnchorElement>()
-            .expect("failed to cast to HtmlAnchorElement");
-        a.set_href(&url);
-        a.set_download("image.exr");
-        let body = document.body().expect("document body not found");
-        body.append_child(&a)
-            .expect("failed to append anchor element to body");
-        a.click();
-        body.remove_child(&a)
-            .expect("failed to remove anchor element");
-        Url::revoke_object_url(&url).expect("failed to revoke object URL");
-    }
-
     fn screenshot(&self) {
         let image = &self.image_f32;
 
@@ -473,6 +422,7 @@ impl PathTracerView {
         let mut layer_attributes = LayerAttributes::named("rgba main layer");
 
         let buffer = image.pixel_buffer.as_ref().unwrap();
+        let mut file = self.gpu.filesystem.create_writer("image.exr");
 
         wgpu::util::DownloadBuffer::read_buffer(
             &self.gpu.device,
@@ -503,7 +453,10 @@ impl PathTracerView {
                         );
 
                         let image = Image::from_layer(layer);
-                        Self::write_image(image);
+                        image
+                            .write()
+                            .to_buffered(file.deref_mut())
+                            .expect("Failed to write image to file");
                     }
                 }
             },

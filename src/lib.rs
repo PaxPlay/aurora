@@ -1,4 +1,5 @@
 pub mod buffers;
+pub mod files;
 mod internal;
 pub mod scenes;
 pub mod shader;
@@ -269,6 +270,7 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub shaders: ShaderManager,
+    pub filesystem: files::Filesystem,
 }
 
 #[derive(Error, Debug)]
@@ -355,12 +357,15 @@ impl GpuContext {
 
         let shaders = ShaderManager::new(device.clone());
 
+        let filesystem = files::Filesystem::new(None);
+
         Ok(Self {
             instance,
             adapter,
             device,
             queue,
             shaders,
+            filesystem,
         })
     }
 

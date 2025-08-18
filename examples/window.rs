@@ -7,7 +7,7 @@ fn main() {
 
 async fn run() {
     let mut aurora = Aurora::new().await.unwrap();
-    let scene_geometry = SceneGeometry::new("cornell_box.obj").await;
+    let scene_geometry = SceneGeometry::new("cornell_box.obj", aurora.get_gpu()).await;
     let scene =
         aurora::scenes::BasicScene3d::new(scene_geometry, aurora.get_gpu(), aurora.get_target());
     aurora.add_scene("basic_3d", Box::new(scene));
