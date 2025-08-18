@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 wgsl_preprocessor = { path = "../wgsl_preprocessor" }
-proc-macro2 = "1.0"
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 

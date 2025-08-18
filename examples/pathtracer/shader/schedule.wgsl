@@ -1,21 +1,4 @@
-struct InvocationSchedule {
-    ray_intersection_groups: vec4<u32>,
-    handle_intersections_groups: vec4<u32>,
-}
-
-struct ScheduleShade {
-    num_rays: atomic<u32>,
-    num_nee_rays: atomic<u32>,
-    shade_invocations: u32,
-    rng_seed_index: u32,
-}
-
-struct ScheduleIntersect {
-    num_intersections: atomic<u32>,
-    num_misses: atomic<u32>,
-    intersect_invocations: u32,
-    rng_seed_index: u32,
-}
+#import "structs.wgsl"
 
 @group(0) @binding(0) var<storage, read_write> schedule: InvocationSchedule;
 @group(0) @binding(1) var<storage, read_write> schedule_intersect: ScheduleIntersect;

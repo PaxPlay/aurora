@@ -1,6 +1,6 @@
 //! WGSL Preprocessor
 //!
-//! A preprocessor for WGSL (WebGPU Shading Language) that supports #include and #define directives
+//! A preprocessor for WGSL (WebGPU Shading Language) that supports #import and #define directives
 //! similar to C preprocessor. This is the main library crate providing runtime preprocessing.
 
 use regex::Regex;
@@ -52,6 +52,11 @@ pub struct WgslPreprocessor {
     max_include_depth: usize,
 }
 
+pub struct ProcessedWgsl {
+    pub content: String,
+    pub included_files: Vec<PathBuf>,
+}
+
 impl Default for WgslPreprocessor {
     fn default() -> Self {
         Self {
@@ -91,27 +96,44 @@ impl WgslPreprocessor {
         &self,
         input: &str,
         base_path: Option<&Path>,
-    ) -> Result<String, PreprocessorError> {
+    ) -> Result<ProcessedWgsl, PreprocessorError> {
+        let mut include_stack = Vec::new();
         let mut included_files = Vec::new();
-        self.process_recursive(input, base_path, &mut included_files, 0)
+        self.process_recursive(input, base_path, &mut include_stack, &mut included_files, 0)
+            .map(|result| ProcessedWgsl {
+                content: result,
+                included_files,
+            })
     }
 
     /// Process a WGSL file with preprocessing
-    pub fn process_file(&self, path: impl AsRef<Path>) -> Result<String, PreprocessorError> {
+    pub fn process_file(&self, path: impl AsRef<Path>) -> Result<ProcessedWgsl, PreprocessorError> {
         let path = path.as_ref();
         let content = fs::read_to_string(path).map_err(|_| PreprocessorError::FileReadError {
             path: path.display().to_string(),
         })?;
 
+        let mut include_stack = Vec::new();
         let mut included_files = vec![path.to_path_buf()];
         let base_path = path.parent();
-        self.process_recursive(&content, base_path, &mut included_files, 0)
+        self.process_recursive(
+            &content,
+            base_path,
+            &mut include_stack,
+            &mut included_files,
+            0,
+        )
+        .map(|result| ProcessedWgsl {
+            content: result,
+            included_files,
+        })
     }
 
     fn process_recursive(
         &self,
         input: &str,
         base_path: Option<&Path>,
+        include_stack: &mut Vec<PathBuf>,
         included_files: &mut Vec<PathBuf>,
         depth: usize,
     ) -> Result<String, PreprocessorError> {
@@ -132,6 +154,7 @@ impl WgslPreprocessor {
                 trimmed,
                 &mut local_defines,
                 base_path,
+                include_stack,
                 included_files,
                 depth,
                 &mut conditional_stack,
@@ -154,6 +177,7 @@ impl WgslPreprocessor {
         line: &str,
         local_defines: &mut HashMap<String, String>,
         base_path: Option<&Path>,
+        include_stack: &mut Vec<PathBuf>,
         included_files: &mut Vec<PathBuf>,
         depth: usize,
         conditional_stack: &mut Vec<ConditionalState>,
@@ -184,8 +208,8 @@ impl WgslPreprocessor {
         }
 
         // Process other directives only if we should include this line
-        if line.starts_with("#include") {
-            return self.process_include(line, base_path, included_files, depth);
+        if line.starts_with("#import") {
+            return self.process_import(line, base_path, include_stack, included_files, depth);
         }
 
         if line.starts_with("#define") {
@@ -202,14 +226,15 @@ impl WgslPreprocessor {
         Ok(Some(self.apply_defines(line, local_defines)))
     }
 
-    fn process_include(
+    fn process_import(
         &self,
         line: &str,
         base_path: Option<&Path>,
+        include_stack: &mut Vec<PathBuf>,
         included_files: &mut Vec<PathBuf>,
         depth: usize,
     ) -> Result<Option<String>, PreprocessorError> {
-        let include_regex = Regex::new(r#"#include\s+[<"]([^">]+)[">]"#).unwrap();
+        let include_regex = Regex::new(r#"#import\s+[<"]([^">]+)[">]"#).unwrap();
 
         if let Some(captures) = include_regex.captures(line) {
             let filename = &captures[1];
@@ -228,9 +253,15 @@ impl WgslPreprocessor {
                 })?;
 
             included_files.push(file_path.clone());
-            let processed_content =
-                self.process_recursive(&content, file_path.parent(), included_files, depth + 1)?;
-            included_files.pop();
+            include_stack.push(file_path.clone());
+            let processed_content = self.process_recursive(
+                &content,
+                file_path.parent(),
+                include_stack,
+                included_files,
+                depth + 1,
+            )?;
+            include_stack.pop();
 
             return Ok(Some(processed_content));
         }
@@ -660,16 +691,16 @@ const release2: bool = true;
 
         let input = r#"
 #ifdef DEBUG
-#include "debug.wgsl"
+#import "debug.wgsl"
 #else
-#include "release.wgsl"
+#import "release.wgsl"
 #endif
 fn main() {}
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(result.contains("const LOG_LEVEL: u32 = 0u;"));
-        assert!(!result.contains("const LOG_LEVEL: u32 = 3u;"));
-        assert!(result.contains("fn main() {}"));
+        assert!(result.content.contains("const LOG_LEVEL: u32 = 0u;"));
+        assert!(!result.content.contains("const LOG_LEVEL: u32 = 3u;"));
+        assert!(result.content.contains("fn main() {}"));
     }
 }

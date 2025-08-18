@@ -295,15 +295,11 @@ impl PathTracerView {
                     push_constant_ranges: &[],
                 });
 
-        register_default!(gpu.shaders, "schedule", "pathtracer/shader/schedule.wgsl");
-        register_default!(gpu.shaders, "primary", "pathtracer/shader/primary.wgsl");
-        register_default!(gpu.shaders, "copy", "pathtracer/shader/copy.wgsl");
-        register_default!(
-            gpu.shaders,
-            "path_tracer",
-            "pathtracer/shader/pathtracer.wgsl"
-        );
-        register_default!(gpu.shaders, "intersect", "pathtracer/shader/intersect.wgsl");
+        register_default!(gpu.shaders, "schedule", "schedule.wgsl");
+        register_default!(gpu.shaders, "primary", "primary.wgsl");
+        register_default!(gpu.shaders, "copy", "copy.wgsl");
+        register_default!(gpu.shaders, "path_tracer", "pathtracer.wgsl");
+        register_default!(gpu.shaders, "intersect", "intersect.wgsl");
 
         let schedule_pipeline = compute_pipeline!(gpu, schedule; &wgpu::ComputePipelineDescriptor {
             label: Some("pt_pipeline_schedule"),
@@ -585,6 +581,10 @@ impl Scene3dView for PathTracerView {
         self.should_clear |= ui.button("Clear Buffer").clicked();
         if ui.button("Get Screenshot").clicked() {
             self.screenshot();
+        }
+
+        if ui.button("Panic").clicked() {
+            panic!("This is a test panic to see if the panic hook works correctly.");
         }
     }
 }

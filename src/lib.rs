@@ -69,9 +69,50 @@ impl Aurora {
         wgpu::TextureFormat::Rgba32Float,
     ];
 
+    #[cfg(target_arch = "wasm32")]
+    fn replace_aurora_div(text: String) -> Result<(), &'static str> {
+        use wasm_bindgen::JsCast;
+        use web_sys::{Document, HtmlElement, Window};
+
+        let window: Window = web_sys::window().ok_or("window not found")?;
+        let document: Document = window.document().ok_or("document not found")?;
+        let aurora_div = document
+            .get_element_by_id("aurora-container")
+            .ok_or("aurora div not found")?
+            .dyn_into::<HtmlElement>()
+            .map_err(|_| "dyn_into cast failed")?;
+
+        aurora_div.set_inner_html(&format!("<p>{text}</p>"));
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn panic_hook(panic_info: &std::panic::PanicInfo) {
+        // #[wasm_bindgen]
+        // extern "C" {
+        //     #[wasm_bindgen(js_namespace = console)]
+        //     fn error(msg: String);
+
+        //     type Error;
+
+        //     #[wasm_bindgen(constructor)]
+        //     fn new() -> Error;
+
+        //     #[wasm_bindgen(structural, method, getter)]
+        //     fn stack(error: &Error) -> String;
+        // }
+        // let stack = Error::new().stack();
+
+        error!(target: "aurora", "Panic occurred: {}", panic_info);
+        if let Err(text) = Self::replace_aurora_div(format!("Panic occurred: {}", panic_info)) {
+            error!(target: "aurora", "Failed to replace aurora div: {text}");
+        }
+        console_error_panic_hook::hook(panic_info);
+    }
+
     pub async fn new() -> Result<Self, NewAuroraError> {
         #[cfg(target_arch = "wasm32")]
-        panic::set_hook(Box::new(console_error_panic_hook::hook));
+        panic::set_hook(Box::new(|panic_info| Self::panic_hook(panic_info)));
 
         let args = Args::parse();
         let gpu = Arc::new(GpuContext::new().await?);

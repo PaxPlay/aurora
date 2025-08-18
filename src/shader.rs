@@ -35,19 +35,30 @@ impl ShaderSource {
     ) -> std::io::Result<wgpu::ShaderModule> {
         let path = file; // maybe concatenate with some subdirectory
         let contents = fs::read_to_string(path)?;
-        
+
         // Use WGSL preprocessor to handle includes and defines
         let mut preprocessor = WgslPreprocessor::new();
-        preprocessor.include_path("shader")
-                   .include_path("examples");
-        
+        preprocessor.include_path("shader").include_path("examples");
+
         let processed_contents = preprocessor
-            .process_string(&contents, Some(std::path::Path::new(path).parent().unwrap_or(std::path::Path::new("."))))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Preprocessing error: {}", e)))?;
+            .process_string(
+                &contents,
+                Some(
+                    std::path::Path::new(path)
+                        .parent()
+                        .unwrap_or(std::path::Path::new(".")),
+                ),
+            )
+            .map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Preprocessing error: {}", e),
+                )
+            })?;
 
         Ok(device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(name),
-            source: wgpu::ShaderSource::Wgsl(processed_contents.into()),
+            source: wgpu::ShaderSource::Wgsl(processed_contents.content.into()),
         }))
     }
 }
@@ -527,7 +538,7 @@ macro_rules! register_default {
             } else {
                 // For now, just use include_str! until we can handle compile-time preprocessing better
                 $sm.register_wgsl_static($name,
-                    wgpu::ShaderSource::Wgsl(include_str!(concat!("../", $file)).into())
+                    wgpu::ShaderSource::Wgsl(wgsl_preprocessor_macro::wgsl!($file).into())
                 );
             }
         }
