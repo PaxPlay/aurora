@@ -52,6 +52,7 @@ pub struct WgslPreprocessor {
     max_include_depth: usize,
 }
 
+#[derive(Debug)]
 pub struct ProcessedWgsl {
     pub content: String,
     pub included_files: Vec<PathBuf>,
@@ -241,7 +242,7 @@ impl WgslPreprocessor {
             let file_path = self.resolve_include_path(filename, base_path)?;
 
             // Check for circular includes
-            if included_files.contains(&file_path) {
+            if include_stack.contains(&file_path) {
                 return Err(PreprocessorError::CircularInclude {
                     file: file_path.display().to_string(),
                 });
@@ -454,7 +455,7 @@ mod tests {
         let input = "let radius: f32 = PI * 2.0;";
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert_eq!(result, "let radius: f32 = 3.14159 * 2.0;\n");
+        assert_eq!(result.content, "let radius: f32 = 3.14159 * 2.0;\n");
     }
 
     #[test]
@@ -466,11 +467,11 @@ mod tests {
         let mut preprocessor = WgslPreprocessor::new();
         preprocessor.include_path(temp_dir.path());
 
-        let input = "#include \"constants.wgsl\"\nlet radius: f32 = PI * 2.0;";
+        let input = "#import \"constants.wgsl\"\nlet radius: f32 = PI * 2.0;";
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(result.contains("const PI: f32 = 3.14159;"));
-        assert!(result.contains("let radius: f32 = PI * 2.0;"));
+        assert!(result.content.contains("const PI: f32 = 3.14159;"));
+        assert!(result.content.contains("let radius: f32 = PI * 2.0;"));
     }
 
     #[test]
@@ -479,8 +480,8 @@ mod tests {
         let file_a = temp_dir.path().join("a.wgsl");
         let file_b = temp_dir.path().join("b.wgsl");
 
-        fs::write(&file_a, "#include \"b.wgsl\"").unwrap();
-        fs::write(&file_b, "#include \"a.wgsl\"").unwrap();
+        fs::write(&file_a, "#import \"b.wgsl\"").unwrap();
+        fs::write(&file_b, "#import \"a.wgsl\"").unwrap();
 
         let mut preprocessor = WgslPreprocessor::new();
         preprocessor.include_path(temp_dir.path());
@@ -505,8 +506,8 @@ fn main() {}
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(result.contains("const debug_enabled: bool = true;"));
-        assert!(result.contains("fn main() {}"));
+        assert!(result.content.contains("const debug_enabled: bool = true;"));
+        assert!(result.content.contains("fn main() {}"));
     }
 
     #[test]
@@ -521,8 +522,8 @@ fn main() {}
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(!result.contains("const debug_enabled: bool = true;"));
-        assert!(result.contains("fn main() {}"));
+        assert!(!result.content.contains("const debug_enabled: bool = true;"));
+        assert!(result.content.contains("fn main() {}"));
     }
 
     #[test]
@@ -537,8 +538,8 @@ fn main() {}
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(result.contains("const debug_mode: bool = true;"));
-        assert!(result.contains("fn main() {}"));
+        assert!(result.content.contains("const debug_mode: bool = true;"));
+        assert!(result.content.contains("fn main() {}"));
     }
 
     #[test]
@@ -554,8 +555,8 @@ fn main() {}
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(!result.contains("const debug_mode: bool = true;"));
-        assert!(result.contains("fn main() {}"));
+        assert!(!result.content.contains("const debug_mode: bool = true;"));
+        assert!(result.content.contains("fn main() {}"));
     }
 
     #[test]
@@ -572,8 +573,8 @@ const mode: u32 = 1u;
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(result.contains("const mode: u32 = 0u;"));
-        assert!(!result.contains("const mode: u32 = 1u;"));
+        assert!(result.content.contains("const mode: u32 = 0u;"));
+        assert!(!result.content.contains("const mode: u32 = 1u;"));
     }
 
     #[test]
@@ -589,8 +590,8 @@ const mode: u32 = 1u;
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(!result.contains("const mode: u32 = 0u;"));
-        assert!(result.contains("const mode: u32 = 1u;"));
+        assert!(!result.content.contains("const mode: u32 = 0u;"));
+        assert!(result.content.contains("const mode: u32 = 1u;"));
     }
 
     #[test]
@@ -616,10 +617,12 @@ const mode: u32 = 1u;
 "#;
         let result = preprocessor.process_string(input, None).unwrap();
 
-        assert!(result.contains("const web_debug: bool = true;"));
-        assert!(!result.contains("const web_release: bool = true;"));
-        assert!(!result.contains("const native_debug: bool = true;"));
-        assert!(!result.contains("const native_release: bool = true;"));
+        assert!(result.content.contains("const web_debug: bool = true;"));
+        assert!(!result.content.contains("const web_release: bool = true;"));
+        assert!(!result.content.contains("const native_debug: bool = true;"));
+        assert!(!result
+            .content
+            .contains("const native_release: bool = true;"));
     }
 
     #[test]

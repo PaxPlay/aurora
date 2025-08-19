@@ -1,15 +1,17 @@
 # WGSL Preprocessor
 
-A preprocessing library for WGSL (WebGPU Shading Language) that supports `#include` and `#define` directives similar to C preprocessor. Provides both runtime and compile-time preprocessing capabilities.
+A preprocessing library for WGSL (WebGPU Shading Language) that supports `#include` and `#define` directives similar to C preprocessor. It provides both runtime and compile-time preprocessing capabilities.
+
+The preprocessor is inspired by the one implemented in [Bevy](https://bevy.org/), as its fearture set is also implemented by the [wgsl-analyzer](https://wgsl-analyzer.github.io/) language server.
 
 ## Features
 
-- **#include directive**: Include other WGSL files with proper path resolution
+- **#import directive**: Import other WGSL files with proper path resolution
 - **#define directive**: Define constants and simple macros
-- **Runtime preprocessing**: Process shaders at runtime with configurable defines and include paths
-- **Compile-time preprocessing**: Process shaders at compile time using procedural macros
-- **Circular include detection**: Prevents infinite recursion
-- **Configurable include paths**: Support for multiple shader directories
+- **Runtime preprocessing**: Process shaders at runtime with configurable defines and import paths
+- **Compile-time preprocessing**: Process shaders at compile time using procedural macros using `wgsl_preprocessor_macro` crate
+- **Circular import detection**: Prevents infinite recursion
+- **Configurable import paths**: Support for multiple shader directories
 
 ## Usage
 
@@ -25,7 +27,7 @@ preprocessor
     .include_path("shaders/common");
 
 let shader_source = r#"
-#include "common.wgsl"
+#import "common.wgsl"
 #define MAX_ITERATIONS 100
 
 @compute @workgroup_size(WORKGROUP_SIZE, 1, 1)
@@ -47,13 +49,13 @@ const VERTEX_SHADER: &str = wgsl!("shaders/vertex.wgsl");
 const FRAGMENT_SHADER: &str = wgsl!("shaders/fragment.wgsl");
 ```
 
-## Include Directive
+## Import Directive
 
-The `#include` directive supports both quoted and angle bracket syntax:
+The `#import` directive supports both quoted and angle bracket syntax:
 
 ```wgsl
-#include "common.wgsl"      // Relative to current file or include paths
-#include <utils/math.wgsl>  // From include paths only
+#import "common.wgsl"      // Relative to current file or include paths
+#import <utils/math.wgsl>  // From include paths only
 ```
 
 Include resolution order:
@@ -110,15 +112,6 @@ const ENABLE_PROFILING: bool = true;
 #endif
 ```
 
-### Conditional Features
-
-- **#ifdef SYMBOL**: Include code if SYMBOL is defined
-- **#ifndef SYMBOL**: Include code if SYMBOL is NOT defined  
-- **#else**: Alternative branch for conditional blocks
-- **#endif**: End conditional block
-- **Nested conditionals**: Full support for nested conditional blocks
-- **Error checking**: Validates matching #endif and prevents multiple #else
-
 ## Configuration
 
 ### Runtime Configuration
@@ -136,27 +129,3 @@ preprocessor.include_path("third_party/shaders");
 // Set maximum include depth (default: 32)
 preprocessor.max_include_depth(16);
 ```
-
-## Examples
-
-See the `examples/` directory for complete usage examples and the `test_shaders/` directory for shader examples demonstrating includes and defines.
-
-Run the basic example:
-```bash
-cargo run --example basic_usage
-```
-
-Run tests:
-```bash
-cargo test
-```
-
-## Error Handling
-
-The preprocessor provides detailed error information:
-
-- `FileNotFound`: Include file could not be found
-- `CircularInclude`: Detected circular include dependency
-- `MaxIncludeDepthExceeded`: Include nesting too deep
-- `FileReadError`: Failed to read include file
-- `InvalidDefine`: Malformed define directive

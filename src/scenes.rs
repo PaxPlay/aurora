@@ -9,7 +9,6 @@ use crate::{register_default, render_pipeline, DebugUi, GpuContext, RenderTarget
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::f32::consts::*;
-use std::ops::DerefMut;
 use std::sync::Arc;
 
 pub trait Scene {

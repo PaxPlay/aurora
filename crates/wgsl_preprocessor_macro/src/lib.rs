@@ -62,7 +62,6 @@ pub fn wgsl(input: TokenStream) -> TokenStream {
             content,
             mut included_files,
         }) => {
-            included_files.push(full_path);
             let included_files: Vec<String> = included_files
                 .into_iter()
                 .map(|p| {
