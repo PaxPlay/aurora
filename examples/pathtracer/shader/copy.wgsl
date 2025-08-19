@@ -14,6 +14,8 @@
 @group(3) @binding(1) var<storage, read_write> schedule_intersect: ScheduleIntersect;
 @group(3) @binding(2) var<storage, read_write> schedule_shade: ScheduleShade;
 
+@group(4) @binding(0) var<uniform> settings: Settings;
+
 @compute
 @workgroup_size(16, 16, 1)
 fn copy_target(
@@ -21,25 +23,72 @@ fn copy_target(
     @builtin(num_workgroups) num_workgroups: vec3<u32>,
 ) {
     if gid.x < camera.resolution.x && gid.y < camera.resolution.y {
+        var result_color = vec4(0.0f);
+        let gidx = camera.resolution.x * gid.y + gid.x;
+        var index = 0u;
 
-        let index = camera.resolution.x * gid.y + gid.x;
-        var result_color = max(primary_rays[index].result_color, vec4(0.0f));
-        var accumulated_color = max(primary_rays[index].accumulated_color, vec4(0.0f));
-        accumulated_color = accumulated_color + result_color;
-        primary_rays[index].accumulated_color = accumulated_color;
+        switch (settings.selected_buffer) {
+            case 0u: { // primary rays
+                index = camera.resolution.x * gid.y + gid.x;
+                result_color = primary_rays[index].result_color;
+                break;
+            }
+            case 1u: { // incidence
+                let num_rays = schedule_shade.shade_invocations;
+                if gidx < num_rays {
+                    let isec = ray_intersections[gidx];
+                    index = isec.primary_ray;
+                    result_color = vec4(isec.w_i * 0.5 + vec3(0.5), 1.0);
+                }
+                break;
+            }
+            case 2u: { // normal
+                let num_rays = schedule_shade.shade_invocations;
+                if gidx < num_rays {
+                    let isec = ray_intersections[gidx];
+                    index = isec.primary_ray;
+                    result_color = vec4(isec.n * 0.5 + vec3(0.5), 1.0);
+                }
+                break;
+            }
+            case 3u: { // w_o
+                let num_rays = schedule_intersect.intersect_invocations;
+                if gidx < num_rays {
+                    let ray = rays[gidx];
+                    index = ray.primary_ray;
+                    result_color = vec4(ray.direction * 0.5 + vec3(0.5), 1.0);
+                }
+                break;
+            }
+            case 4u { // weight
+                let num_rays = schedule_intersect.intersect_invocations;
+                if gidx < num_rays {
+                    let ray = rays[gidx];
+                    index = ray.primary_ray;
+                    result_color = vec4(ray.weight * 0.5 + vec3(0.5), 1.0);
+                }
+                break;
+            }
+            case 5u { // t
+                let num_rays = schedule_shade.shade_invocations;
+                if gidx < num_rays {
+                    let isec = ray_intersections[gidx];
+                    index = isec.primary_ray;
+                    result_color = vec4(vec3(isec.t / 1500), 1.0);
+                }
+                break;
+            }
+            default: {
+                // do nothing
+            }
+        }
 
-        accumulated_color /= accumulated_color.a;
-
-    // let num_rays = schedule_shade.shade_invocations;
-    // let gidx = gid.x + gid.y * (16 * num_workgroups.x);
-    // if gidx < num_rays {
-        // let ray = rays[gidx];
-        // let index = ray.primary_ray;
-        // let accumulated_color = vec4(ray.weight, 1.0);
-        // let isec = ray_intersections[gidx];
-        // let index = isec.primary_ray;
-        // let accumulated_color = vec4(abs(isec.n), 1.0);
-
+        var accumulated_color = result_color;
+        if settings.accumulate != 0 {
+            accumulated_color += primary_rays[index].accumulated_color;
+            primary_rays[index].accumulated_color = accumulated_color;
+            accumulated_color /= accumulated_color.a;
+        }
         output_buffer_f32[4u * index     ] = accumulated_color.r;
         output_buffer_f32[4u * index + 1u] = accumulated_color.g;
         output_buffer_f32[4u * index + 2u] = accumulated_color.b;

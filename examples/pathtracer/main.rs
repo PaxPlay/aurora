@@ -1,5 +1,5 @@
 use aurora::{
-    buffers::Buffer,
+    buffers::{Buffer, MirroredBuffer},
     compute_pipeline, dispatch_size, register_default,
     scenes::{BasicScene3d, Scene3dView, SceneGeometry},
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
@@ -64,6 +64,53 @@ impl ImageStorageBuffer {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct PathTracerSettings {
+    max_iterations: u32,
+    output_buffer: u32,
+    accumulate: u32,
+}
+
+impl Default for PathTracerSettings {
+    fn default() -> Self {
+        Self {
+            max_iterations: 10,
+            output_buffer: 0,
+            accumulate: 1,
+        }
+    }
+}
+
+impl PathTracerSettings {
+    fn ui(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        changed |= ui
+            .add(
+                egui::widgets::Slider::new(&mut self.max_iterations, 1..=10).text("Max Iterations"),
+            )
+            .changed();
+
+        const BUFFERS: [&str; 6] = ["out", "w_i", "n", "w_o", "weight", "t"];
+        let mut output_buffer = self.output_buffer;
+        egui::ComboBox::from_label("Output Buffer")
+            .selected_text(BUFFERS[output_buffer as usize])
+            .show_ui(ui, |ui| {
+                for i in 0..BUFFERS.len() as u32 {
+                    ui.selectable_value(&mut output_buffer, i, BUFFERS[i as usize].to_string());
+                }
+            });
+        changed |= output_buffer != self.output_buffer;
+        self.output_buffer = output_buffer;
+
+        let mut accumulate = self.accumulate != 0;
+        changed |= ui.checkbox(&mut accumulate, "Accumulate").changed();
+        self.accumulate = if accumulate { 1 } else { 0 };
+
+        changed
+    }
+}
+
 struct PathTracerView {
     gpu: Arc<GpuContext>,
     schedule_pipeline: ComputePipeline,
@@ -83,9 +130,11 @@ struct PathTracerView {
     image_target_format: ImageStorageBuffer,
     bgl_image: BindGroupLayout,
     bg_image: Option<wgpu::BindGroup>,
+    bg_settings: wgpu::BindGroup,
     buffer_copy_util: aurora::buffers::BufferCopyUtil,
     rng: rand::rngs::ThreadRng,
     should_clear: bool,
+    settings: MirroredBuffer<PathTracerSettings>,
 }
 
 impl PathTracerView {
@@ -237,6 +286,26 @@ impl PathTracerView {
             .build()
             .expect("failed creating invocations schedule bind group");
 
+        let settings = MirroredBuffer::new(
+            &gpu,
+            "pt_settings",
+            1,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
+        let bgl_settings = BindGroupLayoutBuilder::new(gpu.clone())
+            .add_buffer(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+            )
+            .build();
+        let bg_settings = bgl_settings
+            .bind_group_builder()
+            .buffer(0, &settings)
+            .build()
+            .expect("Failed creating bind group for PathTracerSettings");
+
         let pipeline_layout = gpu
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -265,7 +334,7 @@ impl PathTracerView {
         let pipeline_layout_intersect =
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("pt_pipeline_layout"),
+                    label: Some("pt_pipeline_layout_primary"),
                     bind_group_layouts: &[
                         &bgl_rays.get(),
                         &bgl_schedule.get(),
@@ -277,12 +346,13 @@ impl PathTracerView {
         let pipeline_layout_image =
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("pt_pipeline_layout"),
+                    label: Some("pt_pipeline_layout_image"),
                     bind_group_layouts: &[
                         &bgl_camera.get(),
                         &bgl_rays.get(),
                         &bgl_image.get(),
                         &bgl_schedule_invocations.get(),
+                        &bgl_settings.get(),
                     ],
                     push_constant_ranges: &[],
                 });
@@ -365,9 +435,11 @@ impl PathTracerView {
             image_target_format,
             bgl_image,
             bg_image: None,
+            bg_settings,
             buffer_copy_util: aurora::buffers::BufferCopyUtil::new(2048),
             rng: rand::rng(),
             should_clear: true,
+            settings,
         }
     }
 
@@ -410,12 +482,11 @@ impl PathTracerView {
     fn screenshot(&self) {
         let image = &self.image_f32;
 
-        use exr::meta::attribute::*;
         use exr::prelude::*;
         let resolution: (usize, usize) =
             (image.resolution[0] as usize, image.resolution[1] as usize);
 
-        let mut layer_attributes = LayerAttributes::named("rgba main layer");
+        let layer_attributes = LayerAttributes::named("rgba main layer");
 
         let buffer = image.pixel_buffer.as_ref().unwrap();
         let mut file = self.gpu.filesystem.create_writer("image.exr");
@@ -469,6 +540,10 @@ impl Scene3dView for PathTracerView {
 
         Some(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
             self.seed_buffer.write(ctx, &seeds);
+
+            if self.should_clear {
+                self.settings.write(ctx);
+            }
         }))
     }
 
@@ -510,7 +585,7 @@ impl Scene3dView for PathTracerView {
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);
 
-            for _ in 0..10 {
+            for i in 0..self.settings[0].max_iterations {
                 // ray triangle intersections
                 compute_pass.set_bind_group(0, &self.bg_rays, &[]);
                 compute_pass.set_bind_group(1, &self.bg_schedule_intersect, &[]);
@@ -531,10 +606,17 @@ impl Scene3dView for PathTracerView {
                 compute_pass.set_pipeline(&self.handle_intersections_pipeline.get());
                 compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 16);
 
-                // schedule
-                compute_pass.set_pipeline(&self.schedule_pipeline.get());
-                compute_pass.set_bind_group(0, &self.bg_schedule_invocations, &[]);
-                compute_pass.dispatch_workgroups(1, 1, 1);
+                // shade_invocations gets set to 0 by schedule, if we want to export
+                // buffers depending on the number of shade invocations, we need to
+                // skip scheduling
+                if !([1, 2, 5].contains(&self.settings[0].output_buffer)
+                    && i == self.settings[0].max_iterations - 1)
+                {
+                    // schedule
+                    compute_pass.set_pipeline(&self.schedule_pipeline.get());
+                    compute_pass.set_bind_group(0, &self.bg_schedule_invocations, &[]);
+                    compute_pass.dispatch_workgroups(1, 1, 1);
+                }
             }
         }
         {
@@ -547,6 +629,7 @@ impl Scene3dView for PathTracerView {
             compute_pass.set_bind_group(1, &self.bg_rays, &[]);
             compute_pass.set_bind_group(2, self.bg_image.as_ref().unwrap(), &[]);
             compute_pass.set_bind_group(3, &self.bg_schedule_invocations, &[]);
+            compute_pass.set_bind_group(4, &self.bg_settings, &[]);
             compute_pass.set_pipeline(&self.target_pipeline.get());
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);
@@ -583,8 +666,6 @@ impl Scene3dView for PathTracerView {
             self.screenshot();
         }
 
-        if ui.button("Panic").clicked() {
-            panic!("This is a test panic to see if the panic hook works correctly.");
-        }
+        self.should_clear |= self.settings[0].ui(ui);
     }
 }

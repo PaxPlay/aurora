@@ -85,11 +85,14 @@ fn intersect_rays(
             }
 
             let t = inv_det * dot(e2, s_cross_e1);
-            if t > EPSILON && t < isec.t {
+            if t > 0.01 && t < isec.t {
                 isec.t = t;
                 isec.pos = ray.origin + t * ray.direction;
                 isec.surface_id = i;
                 isec.n = normalize(cross(e1, e2));
+                if dot(isec.n, ray.direction) > 0.0 {
+                    isec.n = -1.0 * isec.n;
+                }
                 isec.w_i = normalize(-ray.direction);
                 isec.weight = ray.weight;
                 isec.primary_ray = ray.primary_ray;

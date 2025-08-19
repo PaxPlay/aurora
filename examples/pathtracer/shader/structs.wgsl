@@ -61,6 +61,12 @@ struct SceneGeometrySizes {
     specular: u32,
 };
 
+struct Settings {
+    max_iterations: u32,
+    selected_buffer: u32,
+    accumulate: u32,
+}
+
 const F32_MAX: f32 = 3.4028e38;
-const EPSILON: f32 = 1e-10;
+const EPSILON: f32 = 1e-4;
 const PI: f32 = 3.14159265359;

@@ -4,6 +4,7 @@ use crate::{compute_pipeline, register_default};
 use log::error;
 use std::marker::PhantomData;
 use std::num::NonZero;
+use std::ops::{Deref, Index, IndexMut};
 use wgpu::util::DeviceExt;
 
 #[derive(Clone)]
@@ -80,6 +81,14 @@ impl<T: bytemuck::Pod> Buffer<T> {
         } else {
             error!(target: "aurora::buffers", "Failed writing buffer {}: {}", self.label, res.err().unwrap());
         }
+    }
+}
+
+impl<T: bytemuck::Pod> Deref for Buffer<T> {
+    type Target = wgpu::Buffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
     }
 }
 
@@ -212,5 +221,55 @@ impl BufferConvertCopy {
         compute_pass.set_pipeline(&self.pipeline.get());
         let x = self.size.unwrap().get().div_ceil(256);
         compute_pass.dispatch_workgroups(x, 1, 1);
+    }
+}
+
+pub struct MirroredBuffer<T: bytemuck::Pod + Default> {
+    pub buffer: Buffer<T>,
+    pub data: Box<[T]>,
+}
+
+impl<T: bytemuck::Pod + Default> MirroredBuffer<T> {
+    pub fn new(gpu: &GpuContext, label: &str, size: usize, usage: wgpu::BufferUsages) -> Self {
+        let data = vec![T::default(); size].into_boxed_slice();
+        let buffer = Buffer::from_data(gpu, label, &data, usage);
+
+        Self { buffer, data }
+    }
+
+    pub fn from_data(
+        gpu: &GpuContext,
+        label: &str,
+        data: Box<[T]>,
+        usage: wgpu::BufferUsages,
+    ) -> Self {
+        let buffer = Buffer::from_data(gpu, label, &data, usage);
+        Self { buffer, data }
+    }
+
+    pub fn write(&mut self, ctx: &mut BufferCopyContext) {
+        self.buffer.write(ctx, self.data.as_ref());
+    }
+}
+
+impl<T: bytemuck::Pod + Default> Deref for MirroredBuffer<T> {
+    type Target = Buffer<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+impl<T: bytemuck::Pod + Default> Index<usize> for MirroredBuffer<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.data[index]
+    }
+}
+
+impl<T: bytemuck::Pod + Default> IndexMut<usize> for MirroredBuffer<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.data[index]
     }
 }
