@@ -1,6 +1,7 @@
 #import "structs.wgsl"
 
 @group(0) @binding(0) var<uniform> camera : CameraBuffer;
+@group(0) @binding(1) var<uniform> settings: Settings;
 
 @group(1) @binding(0) var<storage, read_write> primary_rays : array<PrimaryRayData>;
 @group(1) @binding(1) var<storage, read_write> rays : array<Ray>;
@@ -13,8 +14,6 @@
 @group(3) @binding(0) var<storage, read_write> schedule: InvocationSchedule;
 @group(3) @binding(1) var<storage, read_write> schedule_intersect: ScheduleIntersect;
 @group(3) @binding(2) var<storage, read_write> schedule_shade: ScheduleShade;
-
-@group(4) @binding(0) var<uniform> settings: Settings;
 
 @compute
 @workgroup_size(16, 16, 1)

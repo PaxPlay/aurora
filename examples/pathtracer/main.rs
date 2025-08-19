@@ -130,7 +130,6 @@ struct PathTracerView {
     image_target_format: ImageStorageBuffer,
     bgl_image: BindGroupLayout,
     bg_image: Option<wgpu::BindGroup>,
-    bg_settings: wgpu::BindGroup,
     buffer_copy_util: aurora::buffers::BufferCopyUtil,
     rng: rand::rngs::ThreadRng,
     should_clear: bool,
@@ -170,10 +169,22 @@ impl PathTracerView {
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         );
 
+        let settings = MirroredBuffer::new(
+            &gpu,
+            "pt_settings",
+            1,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
         let bgl_camera = BindGroupLayoutBuilder::new(gpu.clone())
             .label("bgl_camera")
             .add_buffer(
                 0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+            )
+            .add_buffer(
+                1,
                 wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Uniform,
             )
@@ -182,6 +193,7 @@ impl PathTracerView {
             .bind_group_builder()
             .label("bg_camera")
             .buffer(0, &scene.camera.buffer)
+            .buffer(1, &settings)
             .build()
             .unwrap();
 
@@ -286,26 +298,6 @@ impl PathTracerView {
             .build()
             .expect("failed creating invocations schedule bind group");
 
-        let settings = MirroredBuffer::new(
-            &gpu,
-            "pt_settings",
-            1,
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
-
-        let bgl_settings = BindGroupLayoutBuilder::new(gpu.clone())
-            .add_buffer(
-                0,
-                wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Uniform,
-            )
-            .build();
-        let bg_settings = bgl_settings
-            .bind_group_builder()
-            .buffer(0, &settings)
-            .build()
-            .expect("Failed creating bind group for PathTracerSettings");
-
         let pipeline_layout = gpu
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -352,7 +344,6 @@ impl PathTracerView {
                         &bgl_rays.get(),
                         &bgl_image.get(),
                         &bgl_schedule_invocations.get(),
-                        &bgl_settings.get(),
                     ],
                     push_constant_ranges: &[],
                 });
@@ -435,7 +426,6 @@ impl PathTracerView {
             image_target_format,
             bgl_image,
             bg_image: None,
-            bg_settings,
             buffer_copy_util: aurora::buffers::BufferCopyUtil::new(2048),
             rng: rand::rng(),
             should_clear: true,
@@ -629,7 +619,6 @@ impl Scene3dView for PathTracerView {
             compute_pass.set_bind_group(1, &self.bg_rays, &[]);
             compute_pass.set_bind_group(2, self.bg_image.as_ref().unwrap(), &[]);
             compute_pass.set_bind_group(3, &self.bg_schedule_invocations, &[]);
-            compute_pass.set_bind_group(4, &self.bg_settings, &[]);
             compute_pass.set_pipeline(&self.target_pipeline.get());
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);

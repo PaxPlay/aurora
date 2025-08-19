@@ -60,7 +60,7 @@ pub fn wgsl(input: TokenStream) -> TokenStream {
     match process_file_compile_time(&full_path, &include_dir_candidates) {
         Ok(ProcessedWgsl {
             content,
-            mut included_files,
+            included_files,
         }) => {
             let included_files: Vec<String> = included_files
                 .into_iter()
