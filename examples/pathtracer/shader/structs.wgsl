@@ -20,6 +20,8 @@ struct Ray {
     direction: vec3<f32>,
     weight: vec3<f32>,
     primary_ray: u32,
+    t_min: f32,
+    t_max: f32,
 }
 
 struct RayIntersectionData {
@@ -65,6 +67,7 @@ struct Settings {
     max_iterations: u32,
     selected_buffer: u32,
     accumulate: u32,
+    nee: u32,
 }
 
 const F32_MAX: f32 = 3.4028e38;

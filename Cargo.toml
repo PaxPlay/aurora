@@ -2,8 +2,9 @@
 name = "aurora"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+license = "MIT"
+authors = ["Benedikt Krimmel"]
+homepage = "https://paxplay.github.io/aurora"
 
 [features]
 dynamic_shaders= []

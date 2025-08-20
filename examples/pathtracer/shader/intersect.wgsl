@@ -51,7 +51,7 @@ fn intersect_rays(
     if gid.x < num_rays {
         var isec: RayIntersectionData;
         isec.pos = vec3<f32>(-1.0, -1.0, -1.0);
-        isec.t = F32_MAX;
+        isec.t = ray.t_max;
         isec.primary_ray = ray.primary_ray;
 
         for (var i: u32; i < num_triangles; i++) {
@@ -100,7 +100,7 @@ fn intersect_rays(
         }
 
         // Sum up intersection in workgroup
-        if isec.t < 1e38 {
+        if isec.t < ray.t_max {
             let local_idx = atomicAdd(&wg_num_intersections, 1u);
             wg_intersections[local_idx] = isec;
         } else {

@@ -22,7 +22,7 @@ fn generate_rays(
     @builtin(global_invocation_id) gid: vec3<u32>
 ) {
     var screen_pos = (vec2<f32>(gid.xy) + vec2<f32>(0.5, 0.5)) / vec2<f32>(camera.resolution);
-    screen_pos.y = 1.0 - screen_pos.y;
+    screen_pos = vec2(1.0) - screen_pos;
     let world_pos = world_pos_from_camera_space(vec3(screen_pos * 2.0 - vec2(1.0), 0.0));
     let direction = normalize(world_pos - camera.origin);
     var ray_data: PrimaryRayData;
@@ -42,6 +42,8 @@ fn generate_rays(
         ray.direction = ray_data.direction;
         ray.primary_ray = idx;
         ray.weight = vec3<f32>(1.0);
+        ray.t_min = 0.0;
+        ray.t_max = F32_MAX;
         rays[idx] = ray;
     }
 

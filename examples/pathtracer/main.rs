@@ -70,6 +70,7 @@ struct PathTracerSettings {
     max_iterations: u32,
     output_buffer: u32,
     accumulate: u32,
+    nee: u32,
 }
 
 impl Default for PathTracerSettings {
@@ -78,11 +79,19 @@ impl Default for PathTracerSettings {
             max_iterations: 10,
             output_buffer: 0,
             accumulate: 1,
+            nee: 0,
         }
     }
 }
 
 impl PathTracerSettings {
+    fn checkbox(ui: &mut egui::Ui, value: &mut u32, label: &str) -> bool {
+        let mut checked = *value != 0;
+        let changed = ui.checkbox(&mut checked, label).changed();
+        *value = if checked { 1 } else { 0 };
+        changed
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         changed |= ui
@@ -103,10 +112,8 @@ impl PathTracerSettings {
         changed |= output_buffer != self.output_buffer;
         self.output_buffer = output_buffer;
 
-        let mut accumulate = self.accumulate != 0;
-        changed |= ui.checkbox(&mut accumulate, "Accumulate").changed();
-        self.accumulate = if accumulate { 1 } else { 0 };
-
+        changed |= Self::checkbox(ui, &mut self.accumulate, "Accumulate");
+        changed |= Self::checkbox(ui, &mut self.nee, "Next Event Estimation");
         changed
     }
 }
@@ -142,14 +149,17 @@ impl PathTracerView {
         let total_pixels: usize =
             scene.camera.resolution[0] as usize * scene.camera.resolution[1] as usize;
 
+        // Twice the amount to accomodate rays from the previous frame
         let primary_ray_buffer: Buffer<f32> = gpu.create_buffer(
             "primary_rays",
-            size_of::<f32>() * 4 * 4 * total_pixels,
+            size_of::<f32>() * 4 * 4 * total_pixels * 2,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         );
 
+        // Allow 4 times the number of rays as pixels
+        // This is done to include NEE rays and accomodate rays from the previous frame
         let ray_buffer: Buffer<f32> =
-            gpu.create_buffer("rays", 64 * total_pixels, wgpu::BufferUsages::STORAGE);
+            gpu.create_buffer("rays", 64 * total_pixels * 2, wgpu::BufferUsages::STORAGE);
 
         let ray_intersection_buffer: Buffer<f32> = gpu.create_buffer(
             "ray_intersections",

@@ -1,6 +1,7 @@
 #import "structs.wgsl"
 
 @group(0) @binding(0) var<uniform> camera : CameraBuffer;
+@group(0) @binding(1) var<uniform> settings: Settings;
 
 @group(1) @binding(0) var<storage, read_write> primary_rays : array<PrimaryRayData>;
 @group(1) @binding(1) var<storage, read_write> rays : array<Ray>;
@@ -123,20 +124,24 @@ fn handle_intersections(
             secondary_ray.direction = w_o;
             secondary_ray.weight = weight;
             secondary_ray.primary_ray = isec.primary_ray;
+            secondary_ray.t_min = 0.01;
+            secondary_ray.t_max = F32_MAX;
 
             let ray_index = atomicAdd(&wg_num_rays, 1u);
             wg_rays[ray_index] = secondary_ray;
         }
 
-        let primary = primary_rays[isec.primary_ray];
-        let m_a = ambient[mat_idx];
-        var result_color = primary_rays[isec.primary_ray].result_color;
-        let delta = m_a * isec.weight * dot(isec.w_i, isec.n);
-        result_color = max(result_color, vec4(0.0f));
-        primary_rays[isec.primary_ray].result_color = vec4(
-            delta + result_color.rgb,
-            1.0f
-        );
+        if settings.nee == 0u {
+            let primary = primary_rays[isec.primary_ray];
+            let m_a = ambient[mat_idx];
+            var result_color = primary_rays[isec.primary_ray].result_color;
+            let delta = m_a * isec.weight * dot(isec.w_i, isec.n);
+            result_color = max(result_color, vec4(0.0f));
+            primary_rays[isec.primary_ray].result_color = vec4(
+                delta + result_color.rgb,
+                1.0f
+            );
+        }
     }
 
     // write back rays into ray buffer
