@@ -277,9 +277,10 @@ impl Aurora {
 
         gpu.queue.submit(command_buffers);
         surface_texture.present();
-        gpu.device.poll(wgpu::Maintain::Wait);
 
+        gpu.device.poll(wgpu::Maintain::Wait);
         self.timestamp_queries.copy_to_host();
+
         gpu.device.poll(wgpu::Maintain::Wait);
         self.timestamp_queries.process_results(&gpu);
     }
@@ -835,40 +836,16 @@ impl CommandEncoderTimestampExt for wgpu::CommandEncoder {
     }
 }
 
-struct ManagedTimestampQuerySet {
+#[derive(Debug)]
+struct ManagedTimestampQuerySetResources {
     query_set: wgpu::QuerySet,
     buffer: Buffer<u64>,
     staging: Buffer<u64>,
     buffer_host: Arc<Mutex<Box<[u64]>>>,
-    allocated: usize,
-    queries_last_frame: Vec<String>,
-    results_last_frame: Vec<(String, u64)>,
 }
 
-impl ManagedTimestampQuerySet {
+impl ManagedTimestampQuerySetResources {
     fn new(gpu: &GpuContext, count: usize) -> Self {
-        let (query_set, buffer, staging, buffer_host) = Self::allocate(gpu, count);
-
-        Self {
-            query_set,
-            buffer,
-            staging,
-            buffer_host,
-            allocated: count,
-            queries_last_frame: Vec::new(),
-            results_last_frame: Vec::new(),
-        }
-    }
-
-    fn allocate(
-        gpu: &GpuContext,
-        count: usize,
-    ) -> (
-        wgpu::QuerySet,
-        Buffer<u64>,
-        Buffer<u64>,
-        Arc<Mutex<Box<[u64]>>>,
-    ) {
         let query_set = gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("aurora_managed_query_set"),
             ty: wgpu::QueryType::Timestamp,
@@ -891,13 +868,55 @@ impl ManagedTimestampQuerySet {
 
         let buffer_host = Arc::new(Mutex::new(vec![0u64; count].into_boxed_slice()));
 
-        (query_set, buffer, staging, buffer_host)
+        Self {
+            query_set,
+            buffer,
+            staging,
+            buffer_host,
+        }
+    }
+}
+
+const FRAMES_IN_FLIGHT: usize = 32;
+
+struct ManagedTimestampQuerySet {
+    resources: [ManagedTimestampQuerySetResources; FRAMES_IN_FLIGHT],
+    current: usize,
+    allocated: usize,
+    queries_last_frame: Vec<String>,
+    results_last_frame: Vec<(String, u64)>,
+}
+
+impl ManagedTimestampQuerySet {
+    fn new(gpu: &GpuContext, count: usize) -> Self {
+        let resources = Self::allocate(gpu, count);
+
+        Self {
+            resources,
+            current: 0,
+            allocated: count,
+            queries_last_frame: Vec::new(),
+            results_last_frame: Vec::new(),
+        }
+    }
+
+    fn allocate(
+        gpu: &GpuContext,
+        size: usize,
+    ) -> [ManagedTimestampQuerySetResources; FRAMES_IN_FLIGHT] {
+        let mut resources = Vec::with_capacity(FRAMES_IN_FLIGHT);
+        for _ in 0..FRAMES_IN_FLIGHT {
+            resources.push(ManagedTimestampQuerySetResources::new(gpu, size));
+        }
+
+        resources.try_into().unwrap()
     }
 
     fn begin(&mut self, gpu: &GpuContext) -> TimestampQueries {
+        self.current = (self.current + 1) % FRAMES_IN_FLIGHT;
+
         if self.results_last_frame.len() > self.allocated {
-            (self.query_set, self.buffer, self.staging, self.buffer_host) =
-                Self::allocate(gpu, self.results_last_frame.len());
+            self.resources = Self::allocate(gpu, self.results_last_frame.len());
             self.allocated = self.results_last_frame.len();
 
             info!(
@@ -907,8 +926,13 @@ impl ManagedTimestampQuerySet {
             );
         }
 
+        let resources = &mut self.resources[self.current];
+
+        // reset to ensure no stale data
+        resources.buffer_host.lock().unwrap().fill(0);
+
         TimestampQueries {
-            query_set: self.query_set.clone(),
+            query_set: resources.query_set.clone(),
             preallocated: self.allocated,
             queries: Vec::new(),
         }
@@ -923,13 +947,15 @@ impl ManagedTimestampQuerySet {
         let count = self.queries_last_frame.len();
         let copy_size = (count * std::mem::size_of::<u64>()) as wgpu::BufferAddress;
 
+        let resources = &mut self.resources[self.current];
+
         let mut ce = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("aurora_timestamp_query_copy"),
             });
-        ce.resolve_query_set(&self.query_set, 0..count as u32, &self.buffer, 0);
-        ce.copy_buffer_to_buffer(&self.buffer, 0, &self.staging, 0, copy_size);
+        ce.resolve_query_set(&resources.query_set, 0..count as u32, &resources.buffer, 0);
+        ce.copy_buffer_to_buffer(&resources.buffer, 0, &resources.staging, 0, copy_size);
 
         ce.finish()
     }
@@ -937,10 +963,12 @@ impl ManagedTimestampQuerySet {
     fn copy_to_host(&self) {
         let count = self.queries_last_frame.len();
         let copy_size = (count * std::mem::size_of::<u64>()) as wgpu::BufferAddress;
+        let resources = &self.resources[self.current];
 
-        let buffer = self.staging.buffer.clone();
-        let buffer_host = self.buffer_host.clone();
-        self.staging
+        let buffer = resources.staging.buffer.clone();
+        let buffer_host = resources.buffer_host.clone();
+        resources
+            .staging
             .slice(..copy_size)
             .map_async(wgpu::MapMode::Read, move |r| {
                 if let Err(e) = r {
@@ -957,7 +985,8 @@ impl ManagedTimestampQuerySet {
     }
 
     pub fn process_results(&mut self, gpu: &GpuContext) {
-        let buffer_data = self.buffer_host.lock().unwrap();
+        let resources = &mut self.resources[self.current];
+        let buffer_data = resources.buffer_host.lock().unwrap();
         let timestamp_period = gpu.queue.get_timestamp_period() as f64;
 
         let min = buffer_data[..self.queries_last_frame.len()]

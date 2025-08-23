@@ -7,7 +7,7 @@ use std::num::NonZero;
 use std::ops::{Deref, Index, IndexMut};
 use wgpu::util::DeviceExt;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Buffer<T: bytemuck::Pod> {
     pub buffer: wgpu::Buffer,
     pub size: NonZero<usize>,
