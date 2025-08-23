@@ -5,7 +5,10 @@ use log::info;
 
 use crate::buffers::{Buffer, BufferCopyContext, BufferCopyUtil};
 use crate::shader::{BindGroupLayout, BindGroupLayoutBuilder, RenderPipeline};
-use crate::{register_default, render_pipeline, DebugUi, GpuContext, RenderTarget};
+use crate::{
+    register_default, render_pipeline, CommandEncoderTimestampExt, DebugUi, GpuContext,
+    RenderTarget, TimestampQueries,
+};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::f32::consts::*;
@@ -16,6 +19,7 @@ pub trait Scene {
         &mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
+        queries: &mut TimestampQueries,
     ) -> Vec<wgpu::CommandBuffer>;
 
     fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
@@ -886,6 +890,7 @@ impl Scene for BasicScene3d {
         &mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
+        queries: &mut TimestampQueries,
     ) -> Vec<wgpu::CommandBuffer> {
         let mut res: Vec<wgpu::CommandBuffer> = Vec::with_capacity(3);
 
@@ -902,7 +907,7 @@ impl Scene for BasicScene3d {
             res.push(view_copy_cb);
         }
 
-        res.push(view.render(gpu, target, self));
+        res.push(view.render(gpu, target, self, queries));
         res
     }
 
@@ -933,6 +938,7 @@ pub trait Scene3dView {
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
         scene: &BasicScene3d,
+        queries: &mut TimestampQueries,
     ) -> wgpu::CommandBuffer;
 
     fn copy(&mut self, _gpu: Arc<GpuContext>) -> Option<wgpu::CommandBuffer> {
@@ -1034,6 +1040,7 @@ impl Scene3dView for WireframeView {
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
         scene: &BasicScene3d,
+        queries: &mut TimestampQueries,
     ) -> wgpu::CommandBuffer {
         let mut ce = gpu
             .device
@@ -1052,7 +1059,7 @@ impl Scene3dView for WireframeView {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: queries.render_pass_writes("rp_aurora_scene_3d"),
                 occlusion_query_set: None,
             });
             render_pass.set_pipeline(&self.pipeline.get());

@@ -3,8 +3,9 @@ use aurora::{
     compute_pipeline, dispatch_size, register_default,
     scenes::{BasicScene3d, Scene3dView, SceneGeometry},
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
-    Aurora, GpuContext,
+    Aurora, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
+use env_logger::fmt::Timestamp;
 use rand::Rng;
 use std::{ops::DerefMut, sync::Arc};
 
@@ -259,6 +260,7 @@ impl PathTracerView {
         let image_target_format = ImageStorageBuffer::new();
 
         let bgl_schedule = BindGroupLayoutBuilder::new(gpu.clone())
+            .label("bgl_schedule")
             .add_buffer(
                 0,
                 wgpu::ShaderStages::COMPUTE,
@@ -273,16 +275,19 @@ impl PathTracerView {
 
         let bg_schedule_intersect = bgl_schedule
             .bind_group_builder()
+            .label("bg_schedule_intersect")
             .buffer(0, &buffer_schedule_intersect)
             .build()
             .expect("failed creating intersect schedule bind group");
         let bg_schedule_shade = bgl_schedule
             .bind_group_builder()
+            .label("bg_schedule_shade")
             .buffer(0, &buffer_schedule_shade)
             .build()
             .expect("failed creating shade schedule bind group");
 
         let bgl_schedule_invocations = BindGroupLayoutBuilder::new(gpu.clone())
+            .label("bgl_schedule_invocations")
             .add_buffer(
                 0,
                 wgpu::ShaderStages::COMPUTE,
@@ -302,29 +307,30 @@ impl PathTracerView {
 
         let bg_schedule_invocations = bgl_schedule_invocations
             .bind_group_builder()
+            .label("bg_schedule_invocations")
             .buffer(0, &schedule_buffer)
             .buffer(1, &buffer_schedule_intersect)
             .buffer(2, &buffer_schedule_shade)
             .build()
             .expect("failed creating invocations schedule bind group");
 
-        let pipeline_layout = gpu
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("pt_pipeline_layout"),
-                bind_group_layouts: &[
-                    &bgl_camera.get(),
-                    &bgl_rays.get(),
-                    &bgl_schedule.get(),
-                    &scene.gpu_scene_geometry.bind_group_layout.get(),
-                ],
-                push_constant_ranges: &[],
-            });
+        let pipeline_layout_handle_intersect =
+            gpu.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("pt_pipeline_layout_handle_intersections"),
+                    bind_group_layouts: &[
+                        &bgl_camera.get(),
+                        &bgl_rays.get(),
+                        &bgl_schedule.get(),
+                        &scene.gpu_scene_geometry.bind_group_layout.get(),
+                    ],
+                    push_constant_ranges: &[],
+                });
 
         let pipeline_layout_primary =
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("pt_pipeline_layout"),
+                    label: Some("pt_pipeline_layout_primary"),
                     bind_group_layouts: &[
                         &bgl_camera.get(),
                         &bgl_rays.get(),
@@ -336,7 +342,7 @@ impl PathTracerView {
         let pipeline_layout_intersect =
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("pt_pipeline_layout_primary"),
+                    label: Some("pt_pipeline_layout_intersect"),
                     bind_group_layouts: &[
                         &bgl_rays.get(),
                         &bgl_schedule.get(),
@@ -396,16 +402,16 @@ impl PathTracerView {
             module: &intersect,
             entry_point: Some("intersect_rays"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None
+            cache: None,
         });
 
         let handle_intersections_pipeline = compute_pipeline!(gpu, path_tracer; &wgpu::ComputePipelineDescriptor {
             label: Some("pt_pipeline_handle_intersections"),
-            layout: Some(&pipeline_layout),
+            layout: Some(&pipeline_layout_handle_intersect),
             module: &path_tracer,
             entry_point: Some("handle_intersections"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None
+            cache: None,
         });
 
         let target_pipeline = compute_pipeline!(gpu, copy; &wgpu::ComputePipelineDescriptor {
@@ -414,7 +420,7 @@ impl PathTracerView {
             module: &copy,
             entry_point: Some("copy_target"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None
+            cache: None,
         });
 
         Self {
@@ -552,6 +558,7 @@ impl Scene3dView for PathTracerView {
         gpu: Arc<aurora::GpuContext>,
         target: Arc<aurora::RenderTarget>,
         scene: &BasicScene3d,
+        queries: &mut TimestampQueries,
     ) -> wgpu::CommandBuffer {
         self.check_image_bg(gpu.clone(), &target);
 
@@ -572,10 +579,7 @@ impl Scene3dView for PathTracerView {
 
         let resolution = scene.camera.resolution;
         {
-            let mut compute_pass = ce.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("pt_cp_ray"),
-                timestamp_writes: None,
-            });
+            let mut compute_pass = ce.begin_compute_pass_timestamped("pt_cp_ray", queries);
 
             // primary rays
             compute_pass.set_bind_group(0, &self.bg_camera, &[]);
@@ -620,10 +624,7 @@ impl Scene3dView for PathTracerView {
             }
         }
         {
-            let mut compute_pass = ce.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("pt_cp_target"),
-                timestamp_writes: None,
-            });
+            let mut compute_pass = ce.begin_compute_pass_timestamped("pt_cp_target", queries);
 
             compute_pass.set_bind_group(0, &self.bg_camera, &[]);
             compute_pass.set_bind_group(1, &self.bg_rays, &[]);

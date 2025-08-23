@@ -16,7 +16,7 @@ use internal::TargetViewPipeline;
 use scenes::Scene;
 use shader::ShaderManager;
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{collections::BTreeMap, default::Default};
 use thiserror::Error;
 use wgpu::Extent3d;
@@ -24,7 +24,7 @@ use wgpu::Extent3d;
 use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 
-use log::{error, info};
+use log::{error, info, warn};
 
 use clap::Parser;
 
@@ -50,6 +50,7 @@ pub struct Aurora {
     window: Option<AuroraWindow>,
     scenes: BTreeMap<String, SceneHandle>,
     current_scene: Option<String>,
+    timestamp_queries: ManagedTimestampQuerySet,
     args: Args,
 }
 
@@ -129,6 +130,7 @@ impl Aurora {
 
         let format = Self::select_format(&formats, args.format.clone());
         let target = Arc::new(RenderTarget::new(&gpu, format));
+        let timestamp_queries = ManagedTimestampQuerySet::new(&gpu, 64);
 
         Ok(Self {
             gpu,
@@ -136,6 +138,7 @@ impl Aurora {
             window: None,
             scenes: BTreeMap::new(),
             current_scene: None,
+            timestamp_queries,
             args,
         })
     }
@@ -255,16 +258,30 @@ impl Aurora {
         let render_gpu = self.gpu.clone();
         let render_target = self.target.clone();
         let scene_handle = self.get_current_scene().unwrap();
+
+        let mut queries = self.timestamp_queries.begin(&gpu);
+
         let mut command_buffers = {
             let mut scene = scene_handle.try_borrow_mut().unwrap();
-            scene.render(render_gpu, render_target)
+            scene.render(render_gpu, render_target, &mut queries)
         };
 
         let (surface_texture, view) = self.create_surface_texture();
-        command_buffers.append(&mut self.get_window_mut().render(&view, scene_handle));
+        command_buffers.append(&mut self.get_window_mut().render(
+            &view,
+            scene_handle,
+            &mut queries,
+        ));
+
+        command_buffers.push(self.timestamp_queries.resolve_query_set(queries, &gpu));
 
         gpu.queue.submit(command_buffers);
         surface_texture.present();
+        gpu.device.poll(wgpu::Maintain::Wait);
+
+        self.timestamp_queries.copy_to_host();
+        gpu.device.poll(wgpu::Maintain::Wait);
+        self.timestamp_queries.process_results(&gpu);
     }
 }
 
@@ -388,7 +405,8 @@ impl GpuContext {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+                    required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                        | wgpu::Features::TIMESTAMP_QUERY,
                     required_limits: limits,
                     ..Default::default()
                 },
@@ -608,6 +626,7 @@ impl AuroraWindow {
         &mut self,
         view: &wgpu::TextureView,
         scene_handle: SceneHandle,
+        queries: &mut TimestampQueries,
     ) -> Vec<wgpu::CommandBuffer> {
         let window_size: [u32; 2] = [self.surface_config.width, self.surface_config.height];
 
@@ -621,9 +640,9 @@ impl AuroraWindow {
                 .build_command_buffer(&self.gpu, view),
         );
 
-        if let Some(cb) = self
-            .ui_context
-            .render(&self.gpu, view, window_size, Some(scene_handle))
+        if let Some(cb) =
+            self.ui_context
+                .render(&self.gpu, view, window_size, Some(scene_handle), queries)
         {
             result.push(cb);
         }
@@ -658,6 +677,7 @@ impl UiContext {
         view: &wgpu::TextureView,
         window_size: [u32; 2],
         scene: Option<SceneHandle>,
+        queries: &mut TimestampQueries,
     ) -> Option<wgpu::CommandBuffer> {
         let mut ce = gpu
             .device
@@ -674,7 +694,7 @@ impl UiContext {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: queries.render_pass_writes("rp_aurora_ui"),
                 occlusion_query_set: None,
             });
             let mut rp_static = render_pass.forget_lifetime();
@@ -742,4 +762,225 @@ pub fn dispatch_size(total_threads: (u32, u32, u32), wg_size: (u32, u32, u32)) -
         total_threads.1.div_ceil(wg_size.1),
         total_threads.2.div_ceil(wg_size.2),
     )
+}
+
+pub struct TimestampQueries {
+    query_set: wgpu::QuerySet,
+    preallocated: usize,
+    queries: Vec<String>,
+}
+
+impl TimestampQueries {
+    pub fn compute_pass_writes(&mut self, label: &str) -> Option<wgpu::ComputePassTimestampWrites> {
+        let index = self.queries.len();
+        self.queries.push(format!("cpbegin_{}", label.to_string()));
+        self.queries.push(format!("cpend_{}", label.to_string()));
+        if index + 2 >= self.preallocated {
+            warn!(
+                target: "aurora",
+                "Not enough preallocated timestamp queries for compute pass {label}! Used {index}, preallocated {}",
+                self.preallocated
+            );
+
+            None
+        } else {
+            Some(wgpu::ComputePassTimestampWrites {
+                query_set: &self.query_set,
+                beginning_of_pass_write_index: Some(index as u32),
+                end_of_pass_write_index: Some((index + 1) as u32),
+            })
+        }
+    }
+
+    pub fn render_pass_writes(&mut self, label: &str) -> Option<wgpu::RenderPassTimestampWrites> {
+        let index = self.queries.len();
+        self.queries.push(format!("bgn_{}", label.to_string()));
+        self.queries.push(format!("end_{}", label.to_string()));
+        if index + 2 >= self.preallocated {
+            warn!(
+                target: "aurora",
+                "Not enough preallocated timestamp queries for render pass {label}! Used {index}, preallocated {}",
+                self.preallocated
+            );
+
+            None
+        } else {
+            Some(wgpu::RenderPassTimestampWrites {
+                query_set: &self.query_set,
+                beginning_of_pass_write_index: Some(index as u32),
+                end_of_pass_write_index: Some((index + 1) as u32),
+            })
+        }
+    }
+}
+
+pub trait CommandEncoderTimestampExt {
+    fn begin_compute_pass_timestamped(
+        &mut self,
+        label: &str,
+        queries: &mut TimestampQueries,
+    ) -> wgpu::ComputePass<'_>;
+}
+
+impl CommandEncoderTimestampExt for wgpu::CommandEncoder {
+    fn begin_compute_pass_timestamped(
+        &mut self,
+        label: &str,
+        queries: &mut TimestampQueries,
+    ) -> wgpu::ComputePass<'_> {
+        self.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label),
+            timestamp_writes: queries.compute_pass_writes(label),
+        })
+    }
+}
+
+struct ManagedTimestampQuerySet {
+    query_set: wgpu::QuerySet,
+    buffer: Buffer<u64>,
+    staging: Buffer<u64>,
+    buffer_host: Arc<Mutex<Box<[u64]>>>,
+    allocated: usize,
+    queries_last_frame: Vec<String>,
+    results_last_frame: Vec<(String, u64)>,
+}
+
+impl ManagedTimestampQuerySet {
+    fn new(gpu: &GpuContext, count: usize) -> Self {
+        let (query_set, buffer, staging, buffer_host) = Self::allocate(gpu, count);
+
+        Self {
+            query_set,
+            buffer,
+            staging,
+            buffer_host,
+            allocated: count,
+            queries_last_frame: Vec::new(),
+            results_last_frame: Vec::new(),
+        }
+    }
+
+    fn allocate(
+        gpu: &GpuContext,
+        count: usize,
+    ) -> (
+        wgpu::QuerySet,
+        Buffer<u64>,
+        Buffer<u64>,
+        Arc<Mutex<Box<[u64]>>>,
+    ) {
+        let query_set = gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("aurora_managed_query_set"),
+            ty: wgpu::QueryType::Timestamp,
+            count: count as u32,
+        });
+
+        let buffer = Buffer::new(
+            gpu,
+            "aurora_managed_query_buffer",
+            count * 8,
+            wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+        );
+
+        let staging = Buffer::new(
+            gpu,
+            "aurora_managed_query_staging_buffer",
+            count * 8,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        );
+
+        let buffer_host = Arc::new(Mutex::new(vec![0u64; count].into_boxed_slice()));
+
+        (query_set, buffer, staging, buffer_host)
+    }
+
+    fn begin(&mut self, gpu: &GpuContext) -> TimestampQueries {
+        if self.results_last_frame.len() > self.allocated {
+            (self.query_set, self.buffer, self.staging, self.buffer_host) =
+                Self::allocate(gpu, self.results_last_frame.len());
+            self.allocated = self.results_last_frame.len();
+
+            info!(
+                target: "aurora",
+                "Increased timestamp query allocation to {}",
+                self.allocated
+            );
+        }
+
+        TimestampQueries {
+            query_set: self.query_set.clone(),
+            preallocated: self.allocated,
+            queries: Vec::new(),
+        }
+    }
+
+    fn resolve_query_set(
+        &mut self,
+        queries: TimestampQueries,
+        gpu: &GpuContext,
+    ) -> wgpu::CommandBuffer {
+        self.queries_last_frame = queries.queries;
+        let count = self.queries_last_frame.len();
+        let copy_size = (count * std::mem::size_of::<u64>()) as wgpu::BufferAddress;
+
+        let mut ce = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aurora_timestamp_query_copy"),
+            });
+        ce.resolve_query_set(&self.query_set, 0..count as u32, &self.buffer, 0);
+        ce.copy_buffer_to_buffer(&self.buffer, 0, &self.staging, 0, copy_size);
+
+        ce.finish()
+    }
+
+    fn copy_to_host(&self) {
+        let count = self.queries_last_frame.len();
+        let copy_size = (count * std::mem::size_of::<u64>()) as wgpu::BufferAddress;
+
+        let buffer = self.staging.buffer.clone();
+        let buffer_host = self.buffer_host.clone();
+        self.staging
+            .slice(..copy_size)
+            .map_async(wgpu::MapMode::Read, move |r| {
+                if let Err(e) = r {
+                    error!(target: "aurora", "Failed mapping timestamp query buffer: {e}");
+                } else {
+                    let data = buffer.slice(..copy_size).get_mapped_range();
+                    let result: &[u64] = bytemuck::cast_slice(&data);
+
+                    let host_data = &mut buffer_host.lock().unwrap()[..count];
+                    host_data.copy_from_slice(result);
+                }
+                buffer.unmap();
+            });
+    }
+
+    pub fn process_results(&mut self, gpu: &GpuContext) {
+        let buffer_data = self.buffer_host.lock().unwrap();
+        let timestamp_period = gpu.queue.get_timestamp_period() as f64;
+
+        let min = buffer_data[..self.queries_last_frame.len()]
+            .iter()
+            .min()
+            .copied()
+            .unwrap_or(0);
+
+        self.results_last_frame.clear();
+        for (i, name) in self.queries_last_frame.iter().enumerate() {
+            let timestamp = buffer_data[i] - min;
+            let time_ns = (timestamp as f64) * timestamp_period;
+            self.results_last_frame.push((name.clone(), time_ns as u64));
+        }
+
+        if !self.results_last_frame.is_empty() {
+            info!(target: "aurora", "Timestamp query results:");
+            for (name, time_ns) in &self.results_last_frame {
+                info!(
+                    target: "aurora",
+                    "- {}: {:.3} ms", name, (*time_ns as f64) / 1_000_000.0
+                );
+            }
+        }
+    }
 }
