@@ -903,9 +903,7 @@ impl Scene for BasicScene3d {
             .get(&self.current_view)
             .expect("Selected view does not exist.")
             .borrow_mut();
-        if let Some(view_copy_cb) = view.copy(gpu.clone()) {
-            res.push(view_copy_cb);
-        }
+        res.append(&mut view.copy(gpu.clone()));
 
         res.push(view.render(gpu, target, self, queries));
         res
@@ -941,8 +939,8 @@ pub trait Scene3dView {
         queries: &mut TimestampQueries,
     ) -> wgpu::CommandBuffer;
 
-    fn copy(&mut self, _gpu: Arc<GpuContext>) -> Option<wgpu::CommandBuffer> {
-        None
+    fn copy(&mut self, _gpu: Arc<GpuContext>) -> Vec<wgpu::CommandBuffer> {
+        vec![]
     }
 
     fn draw_ui(&mut self, _ui: &mut egui::Ui) {}

@@ -719,21 +719,12 @@ impl UiContext {
                         });
 
                     if self.show_performance_window {
-                        let timing_results = gpu.timing_results.lock().unwrap();
                         egui::Window::new("Performance")
                             .default_open(true)
                             .resizable(true)
+                            .min_size([200.0, 150.0])
                             .show(ctx, |ui| {
-                                egui::ScrollArea::vertical().show(ui, |ui| {
-                                    timing_results.plot_stacked_bars(ui);
-                                    for (i, label) in timing_results.labels.iter().enumerate() {
-                                        ui.label(format!(
-                                            "{}: {:.3} ms",
-                                            label,
-                                            timing_results.series[i].last().unwrap_or(&0.0)
-                                        ));
-                                    }
-                                });
+                                Self::performance_window(gpu, ui);
                             });
                     }
                 }
@@ -767,6 +758,15 @@ impl UiContext {
             .handle_platform_output(&self.window, platform_output);
 
         Some(ce.finish())
+    }
+
+    fn performance_window(gpu: &GpuContext, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let timing_results = gpu.timing_results.lock().unwrap();
+            timing_results.plot_stacked_bars(ui);
+            ui.add_space(10.0);
+            timing_results.performance_table(ui);
+        });
     }
 
     pub fn on_window_event(&mut self, event: &winit::event::WindowEvent) -> bool {
@@ -1024,6 +1024,39 @@ impl TimingResults {
         }
     }
 
+    fn performance_table(&self, ui: &mut egui::Ui) {
+        use egui_extras::{Column, TableBuilder};
+
+        TableBuilder::new(ui)
+            .striped(true)
+            .resizable(true)
+            .column(Column::auto()) // Label
+            .column(Column::auto().at_least(80.0)) // Latest
+            .header(20.0, |mut header| {
+                header.col(|ui| {
+                    ui.strong("Label");
+                });
+                header.col(|ui| {
+                    ui.strong("Latest (ms)");
+                });
+            })
+            .body(|body| {
+                body.rows(15.0, self.labels.len(), |mut row| {
+                    let row_index = row.index();
+                    row.col(|ui| {
+                        ui.label(&self.labels[row_index]);
+                    });
+                    row.col(|ui| {
+                        if let Some(value) = self.series[row_index].last() {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                                ui.label(format!("{:.3}", value));
+                            });
+                        }
+                    });
+                });
+            });
+    }
+
     fn plot_stacked_bars(&self, ui: &mut egui::Ui) -> egui::Response {
         use egui_plot::{Bar, BarChart, Legend, Plot};
 
@@ -1049,8 +1082,17 @@ impl TimingResults {
 
         Plot::new("timing_results")
             .legend(Legend::default())
-            .view_aspect(2.0)
             .show_grid([false, true])
+            .show_axes([false, true])
+            .allow_drag(false)
+            .allow_scroll(false)
+            .allow_zoom(false)
+            .show_background(false)
+            .show_x(false)
+            .y_axis_formatter(|y, _| format!("{}  ", y.value))
+            .y_axis_min_width(10.0)
+            .set_margin_fraction(egui::Vec2::splat(0.0))
+            .view_aspect(3.0)
             .show(ui, |plot_ui| {
                 for chart in charts {
                     plot_ui.bar_chart(chart);

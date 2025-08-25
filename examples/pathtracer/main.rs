@@ -96,7 +96,7 @@ impl PathTracerSettings {
         let mut changed = false;
         changed |= ui
             .add(
-                egui::widgets::Slider::new(&mut self.max_iterations, 1..=10).text("Max Iterations"),
+                egui::widgets::Slider::new(&mut self.max_iterations, 1..=16).text("Max Iterations"),
             )
             .changed();
 
@@ -537,19 +537,36 @@ impl PathTracerView {
 }
 
 impl Scene3dView for PathTracerView {
-    fn copy(&mut self, gpu: Arc<GpuContext>) -> Option<wgpu::CommandBuffer> {
+    fn copy(&mut self, gpu: Arc<GpuContext>) -> Vec<wgpu::CommandBuffer> {
         // rust is fun some times
         let seeds: Vec<_> = self.rng.clone().random_iter::<u32>().take(16).collect();
         // let mut seeds: Vec<u32> = Vec::with_capacity(16);
         // seeds.resize(16, 0);
 
-        Some(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
-            self.seed_buffer.write(ctx, &seeds);
+        let mut ce = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("pt_ce_clear"),
+            });
 
-            if self.should_clear {
-                self.settings.write(ctx);
-            }
-        }))
+        if self.should_clear {
+            self.should_clear = false;
+            ce.clear_buffer(
+                &self.primary_ray_buffer.buffer,
+                0,
+                Some(self.primary_ray_buffer.size.get() as u64),
+            );
+        }
+        vec![
+            ce.finish(),
+            self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
+                self.seed_buffer.write(ctx, &seeds);
+
+                if self.should_clear {
+                    self.settings.write(ctx);
+                }
+            }),
+        ]
     }
 
     fn render(
@@ -566,15 +583,6 @@ impl Scene3dView for PathTracerView {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("pt_ce"),
             });
-
-        if self.should_clear {
-            self.should_clear = false;
-            ce.clear_buffer(
-                &self.primary_ray_buffer.buffer,
-                0,
-                Some(self.primary_ray_buffer.size.get() as u64),
-            );
-        }
 
         let resolution = scene.camera.resolution;
         {
