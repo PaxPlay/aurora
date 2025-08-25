@@ -22,6 +22,7 @@ struct Ray {
     primary_ray: u32,
     t_min: f32,
     t_max: f32,
+    ray_type: u32, // 0: regular, 1: NEE
 }
 
 struct RayIntersectionData {

@@ -16,13 +16,21 @@
 @group(2) @binding(6) var<uniform> specular: array<vec3<f32>, 256>;
 @group(2) @binding(7) var<uniform> sizes: SceneGeometrySizes;
 
-var<workgroup> local_vertices: array<vec3<f32>, 768>;
+var<workgroup> local_vertices: array<f32, 128u * 3u * 3u>;
 var<workgroup> wg_num_intersections: atomic<u32>;
 var<workgroup> wg_num_misses: atomic<u32>;
 var<workgroup> wg_intersections: array<RayIntersectionData, 128>;
 var<workgroup> wg_misses: array<u32, 128>;
 var<workgroup> wg_isec_group_start: u32;
 var<workgroup> wg_miss_group_start: u32;
+
+fn local_vertex(index: u32) -> vec3<f32> {
+    return vec3<f32>(
+        local_vertices[3u * index + 0u],
+        local_vertices[3u * index + 1u],
+        local_vertices[3u * index + 2u]
+    );
+}
 
 @compute
 @workgroup_size(128, 1, 1)
@@ -43,7 +51,9 @@ fn intersect_rays(
 
     if lidx < (num_triangles * 3u) {
         let idx = indices[lidx];
-        local_vertices[lidx] = vertices[idx];
+        local_vertices[3u * lidx + 0u] = vertices[idx].x;
+        local_vertices[3u * lidx + 1u] = vertices[idx].y;
+        local_vertices[3u * lidx + 2u] = vertices[idx].z;
     }
 
     workgroupBarrier();
@@ -56,9 +66,9 @@ fn intersect_rays(
 
         for (var i: u32; i < num_triangles; i++) {
             // https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
-            let a = local_vertices[3u * i];
-            let b = local_vertices[3u * i + 1u];
-            let c = local_vertices[3u * i + 2u];
+            let a = local_vertex(3u * i + 0u);
+            let b = local_vertex(3u * i + 1u);
+            let c = local_vertex(3u * i + 2u);
 
             let e1 = b - a;
             let e2 = c - a;

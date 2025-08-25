@@ -41,6 +41,7 @@ exr = "1.73.0"
 wgsl_preprocessor = { path = "crates/wgsl_preprocessor" }
 wgsl_preprocessor_macro = { path = "crates/wgsl_preprocessor_macro" }
 chrono = "0.4.41"
+egui_plot = "0.32.1"
 
 [dependencies.web-sys]
 version = "0.3.77"

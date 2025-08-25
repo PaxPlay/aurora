@@ -1,4 +1,5 @@
 #import "structs.wgsl"
+#import "random.wgsl"
 
 @group(0) @binding(0) var<uniform> camera : CameraBuffer;
 @group(0) @binding(1) var<uniform> settings: Settings;
@@ -18,57 +19,6 @@
 @group(3) @binding(5) var<uniform> diffuse: array<vec3<f32>, 256>;
 @group(3) @binding(6) var<uniform> specular: array<vec3<f32>, 256>;
 @group(3) @binding(7) var<uniform> sizes: SceneGeometrySizes;
-
-struct PCG {
-    state: u32,
-    inc: u32,
-}
-
-fn pcg_seed(initstate: u32, initseq: u32) -> PCG {
-    var pcg: PCG;
-    pcg.state = 0u;
-    pcg.inc = (initseq << 1u) | 1u;
-    pcg_next_u32(&pcg);
-    pcg.state += initstate;
-    pcg_next_u32(&pcg);
-    return pcg;
-}
-
-fn pcg_next_u32(pcg: ptr<function, PCG>) -> u32 {
-    let state = (*pcg).state * 747796405u + (*pcg).inc;
-    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    (*pcg).state = (word >> 22u) ^ word;
-    return (*pcg).state;
-}
-
-fn pcg_next_f32(pcg: ptr<function, PCG>) -> f32 {
-    return bitcast<f32>((pcg_next_u32(pcg) >> 9u) | 0x3f800000u) - 1.0f;
-}
-
-fn pcg_next_square(pcg: ptr<function, PCG>) -> vec2<f32> {
-    return vec2(pcg_next_f32(pcg), pcg_next_f32(pcg));
-}
-
-fn warp_square_to_hemisphere(sample: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
-    let cosTheta = sample.x;
-    let sinTheta = sqrt(1.0 - cosTheta * cosTheta);
-
-    let phi = 2.0 * PI * sample.y;
-    let sinPhi = sin(phi);
-    let cosPhi = cos(phi);
-
-    let up_hemisphere = vec3<f32>(
-        sinPhi * sinTheta,
-        cosPhi * sinTheta,
-        cosTheta,
-    );
-
-    if dot(up_hemisphere, n) < 0.0 {
-        return -1.0 * up_hemisphere;
-    } else {
-        return up_hemisphere;
-    }
-}
 
 fn bsdf_sample_phong(sample: vec2<f32>, w_i: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return warp_square_to_hemisphere(sample, n);
@@ -126,6 +76,7 @@ fn handle_intersections(
             secondary_ray.primary_ray = isec.primary_ray;
             secondary_ray.t_min = 0.01;
             secondary_ray.t_max = F32_MAX;
+            secondary_ray.ray_type = 0u;
 
             let ray_index = atomicAdd(&wg_num_rays, 1u);
             wg_rays[ray_index] = secondary_ray;

@@ -1,4 +1,5 @@
 #import "structs.wgsl"
+#import "random.wgsl"
 
 @group(0) @binding(0) var<uniform> camera : CameraBuffer;
 
@@ -44,6 +45,7 @@ fn generate_rays(
         ray.weight = vec3<f32>(1.0);
         ray.t_min = 0.0;
         ray.t_max = F32_MAX;
+        ray.ray_type = 0u;
         rays[idx] = ray;
     }
 

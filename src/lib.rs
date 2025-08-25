@@ -8,6 +8,7 @@ pub mod shader;
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 extern crate console_error_panic_hook;
+use core::time;
 #[cfg(target_arch = "wasm32")]
 use std::panic;
 
@@ -708,11 +709,13 @@ impl UiContext {
                         .default_open(true)
                         .resizable(true)
                         .show(ctx, |ui| {
-                            ui.checkbox(
-                                &mut self.show_performance_window,
-                                "Show Performance Window",
-                            );
-                            scene.draw_ui(ui);
+                            egui::ScrollArea::both().show(ui, |ui| {
+                                ui.checkbox(
+                                    &mut self.show_performance_window,
+                                    "Show Performance Window",
+                                );
+                                scene.draw_ui(ui);
+                            });
                         });
 
                     if self.show_performance_window {
@@ -722,8 +725,13 @@ impl UiContext {
                             .resizable(true)
                             .show(ctx, |ui| {
                                 egui::ScrollArea::vertical().show(ui, |ui| {
-                                    for (name, time) in &timing_results.data {
-                                        ui.label(format!("{}: {:.3} ms", name, *time as f64));
+                                    timing_results.plot_stacked_bars(ui);
+                                    for (i, label) in timing_results.labels.iter().enumerate() {
+                                        ui.label(format!(
+                                            "{}: {:.3} ms",
+                                            label,
+                                            timing_results.series[i].last().unwrap_or(&0.0)
+                                        ));
                                     }
                                 });
                             });
@@ -792,8 +800,8 @@ pub struct TimestampQueries {
 impl TimestampQueries {
     pub fn compute_pass_writes(&mut self, label: &str) -> Option<wgpu::ComputePassTimestampWrites> {
         let index = self.queries.len();
-        self.queries.push(format!("cpbegin_{}", label.to_string()));
-        self.queries.push(format!("cpend_{}", label.to_string()));
+        self.queries.push(format!("bgn_{}", label.to_string()));
+        self.queries.push(format!("end_{}", label.to_string()));
         if index + 2 >= self.preallocated {
             warn!(
                 target: "aurora",
@@ -948,17 +956,18 @@ impl ManagedTimestampQuerySet {
                     let result: &[u64] = bytemuck::cast_slice(&data);
 
                     let min = result.iter().min().copied().unwrap_or(0);
-                    let mut timing_results = timing_results.lock().unwrap();
-                    timing_results.data.clear();
-                    for (i, &timestamp) in result.iter().enumerate() {
-                        let name = queries.get(i).cloned().unwrap_or_default();
-                        let time_ns: f32 = if timestamp == 0 || min == 0 {
+                    let mut durations = Vec::with_capacity(result.len());
+                    for timestamp in result {
+                        let time_ns: f32 = if *timestamp == 0 || min == 0 {
                             0.0
                         } else {
                             ((timestamp - min) as f64 * timestamp_period) as f32 / 1_000_000.0
                         };
-                        timing_results.data.push((name, time_ns));
+                        durations.push(time_ns);
                     }
+
+                    let mut timing_results = timing_results.lock().unwrap();
+                    timing_results.process(queries, durations);
                 }
 
                 download.unmap();
@@ -967,11 +976,134 @@ impl ManagedTimestampQuerySet {
 }
 
 struct TimingResults {
-    data: Vec<(String, f32)>,
+    labels: Vec<String>,
+    series: Vec<CircularBuffer<f32>>,
 }
 
 impl TimingResults {
+    const INNER_CAPACITY: usize = 100;
+
     fn new() -> Self {
-        Self { data: Vec::new() }
+        Self {
+            labels: Vec::new(),
+            series: Vec::new(),
+        }
+    }
+
+    fn process(&mut self, labels_in: Vec<String>, timestamps: Vec<f32>) {
+        let mut i: usize = 0;
+        let mut labels = Vec::new();
+        let mut durations = Vec::new();
+
+        while i < labels_in.len() {
+            let label: &String = &labels_in[i];
+            let time = timestamps[i];
+            if label.starts_with("bgn_") {
+                let end_label = label.replacen("bgn_", "end_", 1);
+                if let Some(end_index) = labels_in[i + 1..].iter().position(|l| l == &end_label) {
+                    let end_time = timestamps[i + 1 + end_index];
+                    let duration = end_time - time;
+                    labels.push(label.replacen("bgn_", "", 1));
+                    durations.push(duration);
+                }
+                i += 1;
+            }
+            i += 1;
+        }
+
+        if labels != self.labels {
+            self.labels = labels;
+            self.series.clear();
+            for _ in 0..self.labels.len() {
+                self.series.push(CircularBuffer::new(Self::INNER_CAPACITY));
+            }
+        }
+
+        for (i, &duration) in durations.iter().enumerate() {
+            self.series[i].push(duration);
+        }
+    }
+
+    fn plot_stacked_bars(&self, ui: &mut egui::Ui) -> egui::Response {
+        use egui_plot::{Bar, BarChart, Legend, Plot};
+
+        const BAR_WIDTH: f64 = 1.0;
+
+        let mut charts = Vec::new();
+        for (i, label) in self.labels.iter().enumerate() {
+            let series = &self.series[i];
+            let mut values = Vec::new();
+            for j in 0..series.len() {
+                if let Some(v) = series.get(j) {
+                    values.push(Bar::new(j as f64 * BAR_WIDTH, *v as f64));
+                }
+            }
+
+            let others: Vec<&BarChart> = charts.iter().collect();
+            let bar = BarChart::new(label, values)
+                .name(label)
+                .width(BAR_WIDTH)
+                .stack_on(&others);
+            charts.push(bar);
+        }
+
+        Plot::new("timing_results")
+            .legend(Legend::default())
+            .view_aspect(2.0)
+            .show_grid([false, true])
+            .show(ui, |plot_ui| {
+                for chart in charts {
+                    plot_ui.bar_chart(chart);
+                }
+            })
+            .response
+    }
+}
+
+struct CircularBuffer<T> {
+    data: Vec<T>,
+    capacity: usize,
+    start: usize,
+    len: usize,
+}
+
+impl<T: Default + Clone> CircularBuffer<T> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            data: vec![T::default(); capacity],
+            capacity,
+            start: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, value: T) {
+        if self.len < self.capacity {
+            self.len += 1;
+        } else {
+            self.start = (self.start + 1) % self.capacity;
+        }
+        let end = (self.start + self.len - 1) % self.capacity;
+        self.data[end] = value;
+    }
+
+    fn get(&self, index: usize) -> Option<&T> {
+        if index < self.len {
+            Some(&self.data[(self.start + index) % self.capacity])
+        } else {
+            None
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn last(&self) -> Option<&T> {
+        if self.len == 0 {
+            None
+        } else {
+            self.get(self.len - 1)
+        }
     }
 }

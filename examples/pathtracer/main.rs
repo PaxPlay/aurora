@@ -5,7 +5,6 @@ use aurora::{
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
     Aurora, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
-use env_logger::fmt::Timestamp;
 use rand::Rng;
 use std::{ops::DerefMut, sync::Arc};
 
