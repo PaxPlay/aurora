@@ -14,13 +14,27 @@ use std::collections::BTreeMap;
 use std::f32::consts::*;
 use std::sync::Arc;
 
+#[derive(Debug, thiserror::Error)]
+pub enum SceneRenderError {
+    #[error("GPU error: {0}")]
+    GpuError(#[from] wgpu::Error),
+
+    #[error("Pipeline compilation error: {0}")]
+    PipelineCompilationError(#[from] crate::shader::PipelineCompilationError),
+
+    #[error("Other error")]
+    Other(String),
+}
+
 pub trait Scene {
     fn render(
         &mut self,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
         queries: &mut TimestampQueries,
-    ) -> Vec<wgpu::CommandBuffer>;
+    ) -> Result<Vec<wgpu::CommandBuffer>, SceneRenderError> {
+        Ok(vec![])
+    }
 
     fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
 
@@ -891,7 +905,7 @@ impl Scene for BasicScene3d {
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
         queries: &mut TimestampQueries,
-    ) -> Vec<wgpu::CommandBuffer> {
+    ) -> Result<Vec<wgpu::CommandBuffer>, SceneRenderError> {
         let mut res: Vec<wgpu::CommandBuffer> = Vec::with_capacity(3);
 
         res.push(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
@@ -905,8 +919,8 @@ impl Scene for BasicScene3d {
             .borrow_mut();
         res.append(&mut view.copy(gpu.clone()));
 
-        res.push(view.render(gpu, target, self, queries));
-        res
+        res.push(view.render(gpu, target, self, queries)?);
+        Ok(res)
     }
 
     fn draw_ui(&mut self, ui: &mut egui::Ui) {
@@ -937,7 +951,7 @@ pub trait Scene3dView {
         target: Arc<RenderTarget>,
         scene: &BasicScene3d,
         queries: &mut TimestampQueries,
-    ) -> wgpu::CommandBuffer;
+    ) -> Result<wgpu::CommandBuffer, SceneRenderError>;
 
     fn copy(&mut self, _gpu: Arc<GpuContext>) -> Vec<wgpu::CommandBuffer> {
         vec![]
@@ -1039,7 +1053,7 @@ impl Scene3dView for WireframeView {
         target: Arc<RenderTarget>,
         scene: &BasicScene3d,
         queries: &mut TimestampQueries,
-    ) -> wgpu::CommandBuffer {
+    ) -> Result<wgpu::CommandBuffer, SceneRenderError> {
         let mut ce = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -1060,13 +1074,13 @@ impl Scene3dView for WireframeView {
                 timestamp_writes: queries.render_pass_writes("rp_aurora_scene_3d"),
                 occlusion_query_set: None,
             });
-            render_pass.set_pipeline(&self.pipeline.get());
+            render_pass.set_pipeline(&self.pipeline.get()?);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
 
             //let geometry = &self.gpu_scene_geometry;
             render_pass.draw(0..(scene.scene_geometry.indices.len() as u32), 0..1);
         }
 
-        ce.finish()
+        Ok(ce.finish())
     }
 }

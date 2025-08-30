@@ -17,12 +17,7 @@
 @group(2) @binding(7) var<uniform> sizes: SceneGeometrySizes;
 
 var<workgroup> local_vertices: array<f32, 128u * 3u * 3u>;
-var<workgroup> wg_num_intersections: atomic<u32>;
-var<workgroup> wg_num_misses: atomic<u32>;
-var<workgroup> wg_intersections: array<RayIntersectionData, 128>;
-var<workgroup> wg_misses: array<u32, 128>;
-var<workgroup> wg_isec_group_start: u32;
-var<workgroup> wg_miss_group_start: u32;
+var<workgroup> wg_num_events: array<atomic<u32>, 16>;
 
 fn local_vertex(index: u32) -> vec3<f32> {
     return vec3<f32>(
@@ -40,9 +35,8 @@ fn intersect_rays(
 ) {
     let num_rays = schedule.intersect_invocations;
 
-    if gid.x == 0u {
-        atomicStore(&wg_num_intersections, 0u);
-        atomicStore(&wg_num_misses, 0u);
+    if lidx < 16u {
+        atomicStore(&wg_num_events[gid.x], 0u);
     }
 
     let ray = rays[gid.x];
@@ -57,6 +51,8 @@ fn intersect_rays(
     }
 
     workgroupBarrier();
+    var event_type: u32 = 0u; // 0: miss, 1: nee_hit, 2: nee_miss, 3: primary_hit,
+                              // 4..7: reserved, 8..: intersection with bsdf id
 
     if gid.x < num_rays {
         var isec: RayIntersectionData;
@@ -111,32 +107,32 @@ fn intersect_rays(
 
         // Sum up intersection in workgroup
         if isec.t < ray.t_max {
-            let local_idx = atomicAdd(&wg_num_intersections, 1u);
-            wg_intersections[local_idx] = isec;
+            if ray.ray_type == 1u {
+                // Regular ray hit
+                event_type = 8u; // TODO + bsdf id
+            } else if ray.ray_type == 2u {
+                // NEE ray hit
+                event_type = 1u;
+            } else if ray.ray_type == 0u {
+                // Primary ray hit
+                event_type = 3u;
+            }
         } else {
-            let local_idx = atomicAdd(&wg_num_misses, 1u);
-            wg_misses[local_idx] = isec.primary_ray;
+            if ray.ray_type == 2u {
+                event_type = 2u; // NEE miss
+            }
         }
+
+        isec.event_type = event_type;
+        ray_intersections[gid.x] = isec;
+
+        atomicAdd(&wg_num_events[event_type], 1u);
     }
+
 
     workgroupBarrier();
 
-    let num_intersections = atomicLoad(&wg_num_intersections);
-    let num_misses = atomicLoad(&wg_num_misses);
-
-    // Sum up total intersections using global atomics
-    // results of the atomics are the start indices in the respective buffers
-    if lidx == 0u {
-        wg_isec_group_start = atomicAdd(&schedule.num_intersections,
-            num_intersections);
-        wg_miss_group_start = atomicAdd(&schedule.num_misses,
-            num_misses);
-    }
-
-    workgroupBarrier();
-
-    // write intersection information into global buffers
-    if lidx < num_intersections {
-        ray_intersections[wg_isec_group_start + lidx] = wg_intersections[lidx];
+    if lidx < 16u {
+        atomicAdd(&schedule.num_events[lidx], atomicLoad(&wg_num_events[lidx]));
     }
 }

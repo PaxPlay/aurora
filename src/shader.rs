@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::buffers::Buffer;
@@ -135,10 +136,15 @@ impl ShaderManager {
         }
     }
 
-    pub fn get_shader(&self, name: &str) -> Result<DynamicShaderModuleHandle, String> {
+    pub fn get_shader(
+        &self,
+        name: &str,
+    ) -> Result<DynamicShaderModuleHandle, PipelineCompilationError> {
         match self.shaders.borrow().get(name) {
             Some(handle) => Ok(handle.clone()),
-            None => Err(format!("Specified shader \"{}\" does not exist", name).to_string()),
+            None => Err(PipelineCompilationError::ShaderNotFound(
+                format!("Specified shader \"{}\" does not exist", name).to_string(),
+            )),
         }
     }
 }
@@ -182,11 +188,20 @@ impl ShaderManager {
     }
 }
 
-type ShaderGetter = dyn Fn(&str) -> Result<wgpu::ShaderModule, String>;
+type ShaderGetter = dyn Fn(&str) -> Result<wgpu::ShaderModule, PipelineCompilationError>;
 type RenderPipelineConstructor =
-    dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, String>;
+    dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, PipelineCompilationError>;
 type ComputePipelineConstructor =
-    dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::ComputePipeline, String>;
+    dyn Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::ComputePipeline, PipelineCompilationError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum PipelineCompilationError {
+    #[error("Shader not found: {0}")]
+    ShaderNotFound(String),
+
+    #[error("Other error: {0}")]
+    Other(String),
+}
 
 pub struct RenderPipeline {
     gpu: Arc<GpuContext>,
@@ -197,7 +212,8 @@ pub struct RenderPipeline {
 impl RenderPipeline {
     pub fn new<T>(gpu: Arc<GpuContext>, constructor: T) -> Self
     where
-        T: Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, String> + 'static,
+        T: Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::RenderPipeline, PipelineCompilationError>
+            + 'static,
     {
         Self {
             gpu,
@@ -205,26 +221,24 @@ impl RenderPipeline {
             pipeline: None,
         }
     }
-    fn build(&self) -> wgpu::RenderPipeline {
+    fn build(&self) -> Result<wgpu::RenderPipeline, PipelineCompilationError> {
         let gpu = self.gpu.clone();
         let sg: Box<ShaderGetter> = Box::new(move |shader_name| {
-            gpu.shaders
-                .get_shader(shader_name)
-                .clone()
-                .map(|s| s.get_module())
+            Ok(gpu.shaders.get_shader(shader_name)?.clone().get_module())
         });
-        (self.constructor)(&self.gpu, &sg).unwrap()
+        (self.constructor)(&self.gpu, &sg)
     }
 
-    pub fn get(&mut self) -> wgpu::RenderPipeline {
+    pub fn get(&mut self) -> Result<wgpu::RenderPipeline, PipelineCompilationError> {
         if self.pipeline.is_none() {
-            self.pipeline = Some(self.build());
+            self.pipeline = Some(self.build()?);
         }
 
-        self.pipeline
+        Ok(self
+            .pipeline
             .as_ref()
             .expect("Pipeline not available???")
-            .clone()
+            .clone())
     }
 }
 
@@ -237,7 +251,11 @@ pub struct ComputePipeline {
 impl ComputePipeline {
     pub fn new<T>(gpu: Arc<GpuContext>, constructor: T) -> Self
     where
-        T: Fn(&GpuContext, &ShaderGetter) -> Result<wgpu::ComputePipeline, String> + 'static,
+        T: Fn(
+                &GpuContext,
+                &ShaderGetter,
+            ) -> Result<wgpu::ComputePipeline, PipelineCompilationError>
+            + 'static,
     {
         Self {
             gpu,
@@ -245,26 +263,24 @@ impl ComputePipeline {
             pipeline: None,
         }
     }
-    fn build(&self) -> wgpu::ComputePipeline {
+    fn build(&self) -> Result<wgpu::ComputePipeline, PipelineCompilationError> {
         let gpu = self.gpu.clone();
         let sg: Box<ShaderGetter> = Box::new(move |shader_name| {
-            gpu.shaders
-                .get_shader(shader_name)
-                .clone()
-                .map(|s| s.get_module())
+            Ok(gpu.shaders.get_shader(shader_name)?.clone().get_module())
         });
-        (self.constructor)(&self.gpu, &sg).unwrap()
+        (self.constructor)(&self.gpu, &sg)
     }
 
-    pub fn get(&mut self) -> wgpu::ComputePipeline {
+    pub fn get(&mut self) -> Result<wgpu::ComputePipeline, PipelineCompilationError> {
         if self.pipeline.is_none() {
-            self.pipeline = Some(self.build());
+            self.pipeline = Some(self.build()?);
         }
 
-        self.pipeline
+        Ok(self
+            .pipeline
             .as_ref()
             .expect("Pipeline not available???")
-            .clone()
+            .clone())
     }
 }
 

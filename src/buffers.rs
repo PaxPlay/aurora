@@ -218,7 +218,7 @@ impl BufferConvertCopy {
 
     pub fn copy(&mut self, compute_pass: &mut wgpu::ComputePass<'_>) {
         compute_pass.set_bind_group(0, &self.bind_group, &[]);
-        compute_pass.set_pipeline(&self.pipeline.get());
+        compute_pass.set_pipeline(&self.pipeline.get().expect("Failed getting pipeline"));
         let x = self.size.unwrap().get().div_ceil(256);
         compute_pass.dispatch_workgroups(x, 1, 1);
     }

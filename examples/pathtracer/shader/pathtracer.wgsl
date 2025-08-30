@@ -51,15 +51,14 @@ fn handle_intersections(
 
     let total_num_intersections = schedule.shade_invocations;
     if gid.x < total_num_intersections {
-        let isec = ray_intersections[gid.x];
+        let isec = ray_intersections[schedule.isec_start + gid.x];
         let mat_idx = material_indices[isec.surface_id];
         var pcg: PCG = pcg_seed(rng_seeds[schedule.rng_seed_index], isec.primary_ray);
 
 
         // Russian Roulette
-        const alpha = 0.8;
         let xi = pcg_next_f32(&pcg);
-        if xi <= alpha {
+        if xi <= settings.rr_alpha {
             let m_d = diffuse[mat_idx];
             let m_s = specular[mat_idx];
 
@@ -68,7 +67,7 @@ fn handle_intersections(
             let pdf = bsdf_pdf_phong(w_o);
             let f = bsdf_eval_phong(m_d, m_s, 1.0, isec.w_i, isec.n, w_o);
 
-            let weight = isec.weight * f / pdf / alpha * dot(isec.n, w_o);
+            let weight = isec.weight * f / pdf / settings.rr_alpha * dot(isec.n, w_o);
             var secondary_ray: Ray;
             secondary_ray.origin = isec.pos + EPSILON * w_o;
             secondary_ray.direction = w_o;
@@ -76,7 +75,7 @@ fn handle_intersections(
             secondary_ray.primary_ray = isec.primary_ray;
             secondary_ray.t_min = 0.01;
             secondary_ray.t_max = F32_MAX;
-            secondary_ray.ray_type = 0u;
+            secondary_ray.ray_type = 1u;
 
             let ray_index = atomicAdd(&wg_num_rays, 1u);
             wg_rays[ray_index] = secondary_ray;
@@ -87,10 +86,9 @@ fn handle_intersections(
             let m_a = ambient[mat_idx];
             var result_color = primary_rays[isec.primary_ray].result_color;
             let delta = m_a * isec.weight * dot(isec.w_i, isec.n);
-            result_color = max(result_color, vec4(0.0f));
             primary_rays[isec.primary_ray].result_color = vec4(
                 delta + result_color.rgb,
-                1.0f
+                result_color.a
             );
         }
     }

@@ -22,7 +22,7 @@ struct Ray {
     primary_ray: u32,
     t_min: f32,
     t_max: f32,
-    ray_type: u32, // 0: regular, 1: NEE
+    ray_type: u32, // 0: primary, 1: regular, 2: NEE
 }
 
 struct RayIntersectionData {
@@ -33,11 +33,14 @@ struct RayIntersectionData {
     t: f32,
     surface_id: u32,
     primary_ray: u32,
+    event_type: u32, // 0: miss, 1: nee_hit, 2: nee_miss, 3: primary_hit,
+                     // 4..7: reserved, 8..: intersection with bsdf id
 }
 
 struct InvocationSchedule {
     ray_intersection_groups: vec4<u32>,
     handle_intersections_groups: vec4<u32>,
+    reorder_intersections_groups: vec4<u32>,
 }
 
 struct ScheduleShade {
@@ -45,13 +48,20 @@ struct ScheduleShade {
     num_nee_rays: atomic<u32>,
     shade_invocations: u32,
     rng_seed_index: u32,
+    isec_start: u32,
 }
 
 struct ScheduleIntersect {
-    num_intersections: atomic<u32>,
-    num_misses: atomic<u32>,
+    num_events: array<atomic<u32>, 16>,
     intersect_invocations: u32,
     rng_seed_index: u32,
+}
+
+struct ScheduleReorder {
+    num_events: array<u32, 16>,
+    index_in_event: array<atomic<u32>, 16>, // only used in reorder to determine indices, should equal num_events after
+    event_type_start: array<u32, 16>, // determined by schedule, used by reorder and shade
+    intersect_invocations: u32,
 }
 
 struct SceneGeometrySizes {
@@ -69,6 +79,7 @@ struct Settings {
     selected_buffer: u32,
     accumulate: u32,
     nee: u32,
+    rr_alpha: f32,
 }
 
 const F32_MAX: f32 = 3.4028e38;

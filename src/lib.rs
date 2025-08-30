@@ -8,7 +8,6 @@ pub mod shader;
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 extern crate console_error_panic_hook;
-use core::time;
 #[cfg(target_arch = "wasm32")]
 use std::panic;
 
@@ -53,6 +52,7 @@ pub struct Aurora {
     current_scene: Option<String>,
     timestamp_queries: ManagedTimestampQuerySet,
     args: Args,
+    frame_index: u64,
 }
 
 type SceneHandle = Arc<RefCell<Box<dyn Scene>>>; // this language might not be real
@@ -141,6 +141,7 @@ impl Aurora {
             current_scene: None,
             timestamp_queries,
             args,
+            frame_index: 0,
         })
     }
 
@@ -261,11 +262,18 @@ impl Aurora {
         let scene_handle = self.get_current_scene().unwrap();
 
         let mut queries = self.timestamp_queries.begin(&gpu);
+        let mut command_buffers = Vec::new();
 
-        let mut command_buffers = {
+        let scene_result = {
             let mut scene = scene_handle.try_borrow_mut().unwrap();
             scene.render(render_gpu, render_target, &mut queries)
         };
+
+        if let Ok(mut cmds) = scene_result {
+            command_buffers.append(&mut cmds);
+        } else if let Err(e) = scene_result {
+            error!(target: "aurora", "Scene render error: {e}");
+        }
 
         let (surface_texture, view) = self.create_surface_texture();
         command_buffers.append(&mut self.get_window_mut().render(
@@ -305,6 +313,7 @@ impl winit::application::ApplicationHandler for Aurora {
             }
             WindowEvent::RedrawRequested => {
                 self.render();
+                self.frame_index += 1;
             }
             WindowEvent::Resized(physical_size) => {
                 let gpu = self.gpu.clone();
@@ -397,6 +406,7 @@ impl GpuContext {
         let limits = wgpu::Limits {
             max_storage_buffers_per_shader_stage: 10,
             max_compute_workgroup_storage_size: 32768,
+            max_storage_buffer_binding_size: 1 << 29, // 512MiB
             ..Default::default()
         };
 
