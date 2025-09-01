@@ -106,4 +106,3 @@ fn handle_intersections(
         rays[wg_ray_buffer_start + lidx] = wg_rays[lidx];
     }
 }
-

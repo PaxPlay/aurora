@@ -36,7 +36,7 @@ fn intersect_rays(
     let num_rays = schedule.intersect_invocations;
 
     if lidx < 16u {
-        atomicStore(&wg_num_events[gid.x], 0u);
+        atomicStore(&wg_num_events[lidx], 0u);
     }
 
     let ray = rays[gid.x];

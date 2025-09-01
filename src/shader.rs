@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
+use std::num::NonZero;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -325,6 +326,26 @@ impl BindGroupLayoutBuilder {
         self
     }
 
+    pub fn add_buffer_dynamic(
+        mut self,
+        binding: u32,
+        visibility: wgpu::ShaderStages,
+        ty: wgpu::BufferBindingType,
+        min_binding_size: Option<wgpu::BufferSize>,
+    ) -> Self {
+        self.bindings.push(BindGroupEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty,
+                has_dynamic_offset: true,
+                min_binding_size,
+            },
+        });
+
+        self
+    }
+
     pub fn add_texture(
         mut self,
         binding: u32,
@@ -456,7 +477,7 @@ pub struct BindGroupBuilder {
     bindings: Vec<BindGroupEntry>,
     layout: wgpu::BindGroupLayout,
     label: Option<String>,
-    buffers: Vec<(u32, wgpu::Buffer)>,
+    buffers: Vec<(u32, (wgpu::Buffer, Option<NonZero<u64>>))>,
     textures: Vec<(u32, wgpu::TextureView)>,
     samplers: Vec<(u32, wgpu::Sampler)>,
 }
@@ -468,7 +489,17 @@ impl BindGroupBuilder {
     }
 
     pub fn buffer<T: bytemuck::Pod>(mut self, binding: u32, b: &Buffer<T>) -> Self {
-        self.buffers.push((binding, b.buffer.clone()));
+        self.buffers.push((binding, (b.buffer.clone(), None)));
+        self
+    }
+
+    pub fn buffer_sized<T: bytemuck::Pod>(
+        mut self,
+        binding: u32,
+        b: &Buffer<T>,
+        size: NonZero<u64>,
+    ) -> Self {
+        self.buffers.push((binding, (b.buffer.clone(), Some(size))));
         self
     }
 
@@ -504,10 +535,11 @@ impl BindGroupBuilder {
                     binding: entry.binding,
                     resource: match entry.ty {
                         wgpu::BindingType::Buffer { .. } => {
+                            let (buffer, size) = Self::get_binding(entry.binding, &self.buffers)?;
                             wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: Self::get_binding(entry.binding, &self.buffers)?,
+                                buffer: buffer,
                                 offset: 0,
-                                size: None,
+                                size: *size,
                             })
                         }
                         wgpu::BindingType::Sampler(_) => wgpu::BindingResource::Sampler(

@@ -6,7 +6,7 @@ use aurora::{
     Aurora, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
 use rand::Rng;
-use std::{ops::DerefMut, sync::Arc};
+use std::{num::NonZero, ops::DerefMut, sync::Arc};
 
 fn main() {
     cfg_if::cfg_if! {
@@ -150,6 +150,7 @@ struct PathTracerView {
     rng: rand::rngs::ThreadRng,
     should_clear: bool,
     settings: MirroredBuffer<PathTracerSettings>,
+    buffer_schedule_reorder: Buffer<u32>,
 }
 
 impl PathTracerView {
@@ -292,8 +293,13 @@ impl PathTracerView {
 
         let buffer_schedule_intersect: Buffer<u32> =
             gpu.create_buffer("pt_schedule_intersect", 256, wgpu::BufferUsages::STORAGE);
-        let buffer_schedule_reorder: Buffer<u32> =
-            gpu.create_buffer("pt_schedule_intersect", 256, wgpu::BufferUsages::STORAGE);
+        let buffer_schedule_reorder: Buffer<u32> = gpu.create_buffer(
+            "pt_schedule_reorder",
+            256 * 17, // 16 iterations + primary
+            wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        );
         let buffer_schedule_shade: Buffer<u32> =
             gpu.create_buffer("pt_schedule_shade", 32, wgpu::BufferUsages::STORAGE);
 
@@ -327,10 +333,11 @@ impl PathTracerView {
                 wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: false },
             )
-            .add_buffer(
+            .add_buffer_dynamic(
                 3,
                 wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: false },
+                NonZero::new(256),
             )
             .build();
 
@@ -340,16 +347,17 @@ impl PathTracerView {
             .buffer(0, &schedule_buffer)
             .buffer(1, &buffer_schedule_intersect)
             .buffer(2, &buffer_schedule_shade)
-            .buffer(3, &buffer_schedule_reorder)
+            .buffer_sized(3, &buffer_schedule_reorder, NonZero::new(256).unwrap())
             .build()
             .expect("failed creating invocations schedule bind group");
 
         let bgl_reorder_intersect = BindGroupLayoutBuilder::new(gpu.clone())
             .label("bgl_reorder_intersect")
-            .add_buffer(
+            .add_buffer_dynamic(
                 0,
                 wgpu::ShaderStages::COMPUTE,
                 wgpu::BufferBindingType::Storage { read_only: false },
+                NonZero::new(256),
             )
             .add_buffer(
                 1,
@@ -368,7 +376,7 @@ impl PathTracerView {
                 bgl_reorder_intersect
                     .bind_group_builder()
                     .label(&format!("bg_reorder_intersect_{i}"))
-                    .buffer(0, &buffer_schedule_reorder)
+                    .buffer_sized(0, &buffer_schedule_reorder, NonZero::new(256).unwrap())
                     .buffer(1, &ray_intersection_buffers[i])
                     .buffer(2, &ray_intersection_buffers[(i + 1) % 2])
                     .build()
@@ -547,6 +555,7 @@ impl PathTracerView {
             rng: rand::rng(),
             should_clear: true,
             settings,
+            buffer_schedule_reorder,
         }
     }
 
@@ -647,7 +656,7 @@ impl PathTracerView {
         let resolution = scene.camera.resolution;
         compute_pass.set_bind_group(0, &self.bg_camera, &[]);
         compute_pass.set_bind_group(1, &self.bg_rays[0], &[]);
-        compute_pass.set_bind_group(2, &self.bg_schedule_invocations, &[]);
+        compute_pass.set_bind_group(2, &self.bg_schedule_invocations, &[0]);
         compute_pass.set_pipeline(&self.ray_generation_pipeline.get()?);
         let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
         compute_pass.dispatch_workgroups(x, y, 1);
@@ -685,9 +694,10 @@ impl PathTracerView {
     fn do_schedule(
         &mut self,
         compute_pass: &mut wgpu::ComputePass<'_>,
+        reorder_offset: u32,
     ) -> Result<(), SceneRenderError> {
         compute_pass.set_pipeline(&self.schedule_pipeline.get()?);
-        compute_pass.set_bind_group(0, &self.bg_schedule_invocations, &[]);
+        compute_pass.set_bind_group(0, &self.bg_schedule_invocations, &[reorder_offset * 256]);
         compute_pass.dispatch_workgroups(1, 1, 1);
 
         Ok(())
@@ -696,9 +706,14 @@ impl PathTracerView {
     fn do_reorder(
         &mut self,
         compute_pass: &mut wgpu::ComputePass<'_>,
+        reorder_offset: u32,
     ) -> Result<(), SceneRenderError> {
         compute_pass.set_pipeline(&self.reorder_intersection_pipeline.get()?);
-        compute_pass.set_bind_group(0, &self.bg_reorder_intersect[self.current_ray_buffer], &[]);
+        compute_pass.set_bind_group(
+            0,
+            &self.bg_reorder_intersect[self.current_ray_buffer],
+            &[reorder_offset * 256],
+        );
         compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 32);
 
         self.current_ray_buffer = (self.current_ray_buffer + 1) % 2;
@@ -742,6 +757,28 @@ impl Scene3dView for PathTracerView {
                 Some(self.primary_ray_buffer.size.get() as u64),
             );
         }
+
+        let iterations = self.settings[0].max_iterations;
+        wgpu::util::DownloadBuffer::read_buffer(
+            &gpu.device,
+            &gpu.queue,
+            &self.buffer_schedule_reorder.slice(..),
+            move |res| {
+                if let Ok(download_buffer) = res {
+                    let data: &[u8] = &download_buffer;
+                    let data_u32: &[u32] = bytemuck::try_cast_slice(data)
+                        .expect("Could not cast schedule reorder data from u8 to u32");
+                    for i in 0..(iterations + 1) as usize {
+                        log::info!(
+                            target: "aurora",
+                            "Iteration {i}: {:?} rays",
+                            data_u32[64 * i..64 * (i + 1)].to_vec()
+                        );
+                    }
+                }
+            },
+        );
+
         vec![
             ce.finish(),
             self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
@@ -770,24 +807,25 @@ impl Scene3dView for PathTracerView {
                 label: Some("pt_ce"),
             });
 
+        ce.clear_buffer(&self.buffer_schedule_reorder, 0, None);
         let resolution = scene.camera.resolution;
         {
             let mut compute_pass = ce.begin_compute_pass_timestamped("pt_cp_ray", queries);
 
             // primary rays
             self.do_primary(&mut compute_pass, scene)?;
-            self.do_schedule(&mut compute_pass)?;
-            self.do_reorder(&mut compute_pass)?;
+            self.do_schedule(&mut compute_pass, 0)?;
+            self.do_reorder(&mut compute_pass, 0)?;
 
             for i in 0..self.settings[0].max_iterations {
                 compute_pass.push_debug_group(&format!("Path Tracer Iteration {i}"));
                 // handle intersections
                 self.do_shade(&mut compute_pass, scene)?;
-                self.do_schedule(&mut compute_pass)?;
+                self.do_schedule(&mut compute_pass, i + 1)?;
 
                 self.do_intersect(&mut compute_pass, scene)?;
-                self.do_schedule(&mut compute_pass)?;
-                self.do_reorder(&mut compute_pass)?;
+                self.do_schedule(&mut compute_pass, i + 1)?;
+                self.do_reorder(&mut compute_pass, i + 1)?;
 
                 // shade_invocations gets set to 0 by schedule, if we want to export
                 // buffers depending on the number of shade invocations, we need to
@@ -807,7 +845,11 @@ impl Scene3dView for PathTracerView {
             compute_pass.set_bind_group(0, &self.bg_camera, &[]);
             compute_pass.set_bind_group(1, &self.bg_rays[0], &[]);
             compute_pass.set_bind_group(2, self.bg_image.as_ref().unwrap(), &[]);
-            compute_pass.set_bind_group(3, &self.bg_schedule_invocations, &[]);
+            compute_pass.set_bind_group(
+                3,
+                &self.bg_schedule_invocations,
+                &[self.settings[0].max_iterations * 256],
+            );
             compute_pass.set_pipeline(&self.target_pipeline.get()?);
             let (x, y, _) = dispatch_size((resolution[0], resolution[1], 1), (16, 16, 1));
             compute_pass.dispatch_workgroups(x, y, 1);

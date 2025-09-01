@@ -15,8 +15,10 @@ fn reorder_intersections(
 ) {
     if lidx < 16u {
         atomicStore(&wg_num_events[lidx], 0u);
-        event_offsets[lidx] += schedule.event_type_start[lidx];
+        event_offsets[lidx] = schedule.event_type_start[lidx];
     }
+
+    workgroupBarrier();
 
     var index: u32 = 0u;
     var isec: RayIntersectionData;
