@@ -5,6 +5,7 @@ use aurora::{
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
     Aurora, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
+use log::{info, warn};
 use rand::Rng;
 use std::{num::NonZero, ops::DerefMut, sync::Arc};
 
@@ -77,7 +78,7 @@ struct PathTracerSettings {
 impl Default for PathTracerSettings {
     fn default() -> Self {
         Self {
-            max_iterations: 1,
+            max_iterations: 10,
             output_buffer: 0,
             accumulate: 1,
             nee: 0,
@@ -132,16 +133,19 @@ struct PathTracerView {
     reorder_intersection_pipeline: ComputePipeline,
     handle_intersections_pipeline: ComputePipeline,
     target_pipeline: ComputePipeline,
+    nee_miss_pipeline: ComputePipeline,
     schedule_buffer: Buffer<u32>,
     seed_buffer: Buffer<u32>,
     primary_ray_buffer: Buffer<f32>,
+    ray_intersection_buffers: [Buffer<f32>; 2],
     bg_camera: wgpu::BindGroup,
     bg_rays: [wgpu::BindGroup; 2],
-    bg_reorder_intersect: [wgpu::BindGroup; 2],
-    current_ray_buffer: usize,
+    bg_reorder_intersect: wgpu::BindGroup,
     bg_schedule_invocations: wgpu::BindGroup,
     bg_schedule_intersect: wgpu::BindGroup,
     bg_schedule_shade: wgpu::BindGroup,
+    bg_schedule_nee_miss: wgpu::BindGroup,
+    bg_schedule_copy: wgpu::BindGroup,
     image_f32: ImageStorageBuffer,
     image_target_format: ImageStorageBuffer,
     bgl_image: BindGroupLayout,
@@ -176,12 +180,12 @@ impl PathTracerView {
             gpu.create_buffer(
                 "ray_intersections",
                 80 * 2 * total_pixels,
-                wgpu::BufferUsages::STORAGE,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
             gpu.create_buffer(
                 "ray_intersections",
                 80 * 2 * total_pixels,
-                wgpu::BufferUsages::STORAGE,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
         ];
 
@@ -302,6 +306,8 @@ impl PathTracerView {
         );
         let buffer_schedule_shade: Buffer<u32> =
             gpu.create_buffer("pt_schedule_shade", 32, wgpu::BufferUsages::STORAGE);
+        let buffer_schedule_nee_miss: Buffer<u32> =
+            gpu.create_buffer("pt_schedule_nee_miss", 32, wgpu::BufferUsages::STORAGE);
 
         let bg_schedule_intersect = bgl_schedule
             .bind_group_builder()
@@ -315,6 +321,12 @@ impl PathTracerView {
             .buffer(0, &buffer_schedule_shade)
             .build()
             .expect("failed creating shade schedule bind group");
+        let bg_schedule_nee_miss = bgl_schedule
+            .bind_group_builder()
+            .label("bg_schedule_nee_miss")
+            .buffer(0, &buffer_schedule_nee_miss)
+            .build()
+            .expect("failed creating nee miss schedule bind group");
 
         let bgl_schedule_invocations = BindGroupLayoutBuilder::new(gpu.clone())
             .label("bgl_schedule_invocations")
@@ -339,6 +351,11 @@ impl PathTracerView {
                 wgpu::BufferBindingType::Storage { read_only: false },
                 NonZero::new(256),
             )
+            .add_buffer(
+                4,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+            )
             .build();
 
         let bg_schedule_invocations = bgl_schedule_invocations
@@ -348,8 +365,32 @@ impl PathTracerView {
             .buffer(1, &buffer_schedule_intersect)
             .buffer(2, &buffer_schedule_shade)
             .buffer_sized(3, &buffer_schedule_reorder, NonZero::new(256).unwrap())
+            .buffer(4, &buffer_schedule_nee_miss)
             .build()
             .expect("failed creating invocations schedule bind group");
+
+        let bgl_schedule_copy = BindGroupLayoutBuilder::new(gpu.clone())
+            .label("bgl_schedule_copy")
+            .add_buffer(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+            )
+            .add_buffer_dynamic(
+                1,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+                NonZero::new(256),
+            )
+            .build();
+
+        let bg_schedule_copy = bgl_schedule_copy
+            .bind_group_builder()
+            .label("bg_schedule_copy")
+            .buffer(0, &schedule_buffer)
+            .buffer_sized(1, &buffer_schedule_reorder, NonZero::new(256).unwrap())
+            .build()
+            .expect("failed creating copy schedule bind group");
 
         let bgl_reorder_intersect = BindGroupLayoutBuilder::new(gpu.clone())
             .label("bgl_reorder_intersect")
@@ -371,19 +412,13 @@ impl PathTracerView {
             )
             .build();
 
-        let bg_reorder_intersect: [wgpu::BindGroup; 2] = (0..2)
-            .map(|i| {
-                bgl_reorder_intersect
-                    .bind_group_builder()
-                    .label(&format!("bg_reorder_intersect_{i}"))
-                    .buffer_sized(0, &buffer_schedule_reorder, NonZero::new(256).unwrap())
-                    .buffer(1, &ray_intersection_buffers[i])
-                    .buffer(2, &ray_intersection_buffers[(i + 1) % 2])
-                    .build()
-                    .unwrap()
-            })
-            .collect::<Vec<_>>()
-            .try_into()
+        let bg_reorder_intersect = bgl_reorder_intersect
+            .bind_group_builder()
+            .label(&format!("bg_reorder_intersect"))
+            .buffer_sized(0, &buffer_schedule_reorder, NonZero::new(256).unwrap())
+            .buffer(1, &ray_intersection_buffers[0])
+            .buffer(2, &ray_intersection_buffers[1])
+            .build()
             .unwrap();
 
         let pipeline_layout_handle_intersect =
@@ -439,7 +474,7 @@ impl PathTracerView {
                         &bgl_camera.get(),
                         &bgl_rays.get(),
                         &bgl_image.get(),
-                        &bgl_schedule_invocations.get(),
+                        &bgl_schedule_copy.get(),
                     ],
                     push_constant_ranges: &[],
                 });
@@ -449,6 +484,13 @@ impl PathTracerView {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_schedule"),
                     bind_group_layouts: &[&bgl_schedule_invocations.get()],
+                    push_constant_ranges: &[],
+                });
+        let pipeline_layout_nee_miss =
+            gpu.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("pt_pipeline_layout_nee_miss"),
+                    bind_group_layouts: &[&bgl_rays.get(), &bgl_schedule.get()],
                     push_constant_ranges: &[],
                 });
 
@@ -463,6 +505,7 @@ impl PathTracerView {
             "reorder_intersections",
             "reorder_intersections.wgsl"
         );
+        register_default!(gpu.shaders, "nee_miss", "nee_miss.wgsl");
 
         let schedule_pipeline = compute_pipeline!(gpu, schedule; &wgpu::ComputePipelineDescriptor {
             label: Some("pt_pipeline_schedule"),
@@ -528,6 +571,15 @@ impl PathTracerView {
             cache: None,
         });
 
+        let nee_miss_pipeline = compute_pipeline!(gpu, nee_miss; &wgpu::ComputePipelineDescriptor {
+            label: Some("pt_pipeline_nee_miss"),
+            layout: Some(&pipeline_layout_nee_miss),
+            module: &nee_miss,
+            entry_point: Some("nee_miss"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
         Self {
             gpu,
             schedule_pipeline,
@@ -537,16 +589,19 @@ impl PathTracerView {
             handle_intersections_pipeline,
             reorder_intersection_pipeline,
             target_pipeline,
+            nee_miss_pipeline,
             schedule_buffer,
             seed_buffer,
             primary_ray_buffer,
+            ray_intersection_buffers,
             bg_camera,
             bg_rays,
             bg_reorder_intersect,
-            current_ray_buffer: 0,
             bg_schedule_invocations,
             bg_schedule_intersect,
             bg_schedule_shade,
+            bg_schedule_nee_miss,
+            bg_schedule_copy,
             image_f32,
             image_target_format,
             bgl_image,
@@ -682,7 +737,7 @@ impl PathTracerView {
         compute_pass: &mut wgpu::ComputePass<'_>,
         scene: &BasicScene3d,
     ) -> Result<(), SceneRenderError> {
-        compute_pass.set_bind_group(0, &self.bg_rays[self.current_ray_buffer], &[]);
+        compute_pass.set_bind_group(0, &self.bg_rays[0], &[]);
         compute_pass.set_bind_group(1, &self.bg_schedule_intersect, &[]);
         compute_pass.set_bind_group(2, &scene.gpu_scene_geometry.bind_group, &[]);
         compute_pass.set_pipeline(&self.ray_intersection_pipeline.get()?);
@@ -709,14 +764,8 @@ impl PathTracerView {
         reorder_offset: u32,
     ) -> Result<(), SceneRenderError> {
         compute_pass.set_pipeline(&self.reorder_intersection_pipeline.get()?);
-        compute_pass.set_bind_group(
-            0,
-            &self.bg_reorder_intersect[self.current_ray_buffer],
-            &[reorder_offset * 256],
-        );
+        compute_pass.set_bind_group(0, &self.bg_reorder_intersect, &[reorder_offset * 256]);
         compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 32);
-
-        self.current_ray_buffer = (self.current_ray_buffer + 1) % 2;
 
         Ok(())
     }
@@ -727,13 +776,69 @@ impl PathTracerView {
         scene: &BasicScene3d,
     ) -> Result<(), SceneRenderError> {
         compute_pass.set_bind_group(0, &self.bg_camera, &[]);
-        compute_pass.set_bind_group(1, &self.bg_rays[self.current_ray_buffer], &[]);
+        compute_pass.set_bind_group(1, &self.bg_rays[1], &[]);
         compute_pass.set_bind_group(2, &self.bg_schedule_shade, &[]);
         compute_pass.set_bind_group(3, &scene.gpu_scene_geometry.bind_group, &[]);
         compute_pass.set_pipeline(&self.handle_intersections_pipeline.get()?);
         compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 16);
 
         Ok(())
+    }
+
+    fn do_nee(&mut self, compute_pass: &mut wgpu::ComputePass<'_>) -> Result<(), SceneRenderError> {
+        compute_pass.set_bind_group(0, &self.bg_rays[1], &[]);
+        compute_pass.set_bind_group(1, &self.bg_schedule_nee_miss, &[]);
+        compute_pass.set_pipeline(&self.nee_miss_pipeline.get()?);
+        compute_pass.dispatch_workgroups_indirect(&self.schedule_buffer.buffer, 48);
+
+        Ok(())
+    }
+
+    fn buffer_check(&mut self) {
+        let gpu = self.gpu.clone();
+        wgpu::util::DownloadBuffer::read_buffer(
+            &gpu.device,
+            &gpu.queue,
+            &self.ray_intersection_buffers[1].slice(..),
+            move |res| {
+                if let Ok(download_buffer) = res {
+                    let data: &[u8] = &download_buffer;
+                    let data_u32: &[u32] = bytemuck::try_cast_slice(data)
+                        .expect("Could not cast intersection data from u8 to f32");
+                    let chunks = data_u32.chunks_exact(20);
+                    let event_types = chunks.map(|chunk| chunk[19]);
+                    let chunks = data_u32.chunks_exact(20);
+                    info!(target: "aurora", "Downloaded {} intersections", chunks.len());
+                    info!(target: "aurora", "First 5: {:?}", chunks.take(5).collect::<Vec<_>>());
+
+                    info!(target: "aurora", "--- Intersection Buffer Check ---");
+                    let mut count = [0u32; 16];
+                    let mut oob_errors: usize = 0;
+                    let mut order_errors: usize = 0;
+                    let mut last_et: i32 = -1;
+                    for et in event_types {
+                        if (et as usize) < count.len() {
+                            count[et as usize] += 1;
+                            if last_et > et as i32 {
+                                order_errors += 1;
+                            }
+                            last_et = et as i32;
+                        } else {
+                            oob_errors += 1;
+                        }
+                    }
+
+                    info!(target: "aurora", "Event Type Counts: {:?}", &count);
+                    if oob_errors > 0 {
+                        warn!(target: "aurora", "There were {oob_errors} out of bounds event types in the intersection buffer");
+                    }
+                    if order_errors > 0 {
+                        warn!(target: "aurora", "There were {order_errors} out of order event types in the intersection buffer");
+                    }
+                    info!(target: "aurora", "---------------------------------");
+                }
+            },
+        );
     }
 }
 
@@ -769,11 +874,15 @@ impl Scene3dView for PathTracerView {
                     let data_u32: &[u32] = bytemuck::try_cast_slice(data)
                         .expect("Could not cast schedule reorder data from u8 to u32");
                     for i in 0..(iterations + 1) as usize {
-                        log::info!(
-                            target: "aurora",
-                            "Iteration {i}: {:?} rays",
-                            data_u32[64 * i..64 * (i + 1)].to_vec()
-                        );
+                        let num_events = &data_u32[64 * i..64 * i + 16];
+                        let event_type_start = &data_u32[64 * i + 32..64 * i + 48];
+                        let intersect_invocations = data_u32[64 * i + 48];
+                        // log::info!(
+                        //     target: "aurora",
+                        //     "Iteration {i}: invocations: {:>8}, miss: {:>8}, nee_hit: {:>8}, nee_miss: {:>8}, primary_hit: {:>8}, shade: {:?}, event_type_start: {:?}",
+                        //     intersect_invocations, num_events[0], num_events[1], num_events[2], num_events[3],
+                        //     &num_events[8..], event_type_start,
+                        // );
                     }
                 }
             },
@@ -821,6 +930,9 @@ impl Scene3dView for PathTracerView {
                 compute_pass.push_debug_group(&format!("Path Tracer Iteration {i}"));
                 // handle intersections
                 self.do_shade(&mut compute_pass, scene)?;
+                if self.settings[0].nee != 0 {
+                    self.do_nee(&mut compute_pass)?;
+                }
                 self.do_schedule(&mut compute_pass, i + 1)?;
 
                 self.do_intersect(&mut compute_pass, scene)?;
@@ -843,11 +955,11 @@ impl Scene3dView for PathTracerView {
             let mut compute_pass = ce.begin_compute_pass_timestamped("pt_cp_target", queries);
 
             compute_pass.set_bind_group(0, &self.bg_camera, &[]);
-            compute_pass.set_bind_group(1, &self.bg_rays[0], &[]);
+            compute_pass.set_bind_group(1, &self.bg_rays[1], &[]);
             compute_pass.set_bind_group(2, self.bg_image.as_ref().unwrap(), &[]);
             compute_pass.set_bind_group(
                 3,
-                &self.bg_schedule_invocations,
+                &self.bg_schedule_copy,
                 &[self.settings[0].max_iterations * 256],
             );
             compute_pass.set_pipeline(&self.target_pipeline.get()?);
@@ -888,6 +1000,10 @@ impl Scene3dView for PathTracerView {
 
         if ui.button("panic").clicked() {
             panic!("User induced panic");
+        }
+
+        if ui.button("buffer_check").clicked() {
+            self.buffer_check();
         }
 
         self.should_clear |= self.settings[0].ui(ui);

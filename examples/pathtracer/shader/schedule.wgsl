@@ -4,6 +4,7 @@
 @group(0) @binding(1) var<storage, read_write> schedule_intersect: ScheduleIntersect;
 @group(0) @binding(2) var<storage, read_write> schedule_shade: ScheduleShade;
 @group(0) @binding(3) var<storage, read_write> schedule_reorder: ScheduleReorder;
+@group(0) @binding(4) var<storage, read_write> schedule_nee: ScheduleNEE;
 
 var<workgroup> num_events: array<u32, 16>;
 var<workgroup> event_offsets: array<u32, 16>;
@@ -32,12 +33,21 @@ fn schedule_invocations(
 
         let num_intersections = num_events[8] + num_events[3];
         schedule.handle_intersections_groups = vec4<u32>(
-            (num_intersections + 255u) / 256u,
+            (num_intersections + 127u) / 128u,
             1u,
             1u,
             num_intersections,
         );
         schedule_shade.shade_invocations = num_intersections;
+
+        let num_nee_miss = num_events[2];
+        schedule.nee_miss_groups = vec4<u32>(
+            (num_nee_miss + 255u) / 256u,
+            1u,
+            1u,
+            num_nee_miss,
+        );
+        schedule_nee.nee_invocations = num_nee_miss;
 
         atomicStore(&schedule_shade.num_rays, 0u);
         atomicStore(&schedule_shade.num_nee_rays, 0u);
@@ -79,5 +89,6 @@ fn schedule_invocations(
     atomicStore(&schedule_reorder.index_in_event[lidx], 0u);
 
     schedule_shade.isec_start = event_offsets[8]; // shade invocations need to start loading intersections from here
+    schedule_nee.nee_start = event_offsets[2];
 }
 

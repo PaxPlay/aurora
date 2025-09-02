@@ -1,5 +1,6 @@
 #import "structs.wgsl"
 #import "random.wgsl"
+#import "nee_sample.wgsl"
 
 @group(0) @binding(0) var<uniform> camera : CameraBuffer;
 @group(0) @binding(1) var<uniform> settings: Settings;
@@ -40,7 +41,7 @@ var<workgroup> wg_num_rays: atomic<u32>;
 var<workgroup> wg_ray_buffer_start: u32;
 
 @compute
-@workgroup_size(256, 1, 1)
+@workgroup_size(128, 1, 1)
 fn handle_intersections(
     @builtin(global_invocation_id) gid: vec3<u32>,
     @builtin(local_invocation_index) lidx: u32
@@ -55,13 +56,12 @@ fn handle_intersections(
         let mat_idx = material_indices[isec.surface_id];
         var pcg: PCG = pcg_seed(rng_seeds[schedule.rng_seed_index], isec.primary_ray);
 
+        let m_d = diffuse[mat_idx];
+        let m_s = specular[mat_idx];
 
         // Russian Roulette
         let xi = pcg_next_f32(&pcg);
         if xi <= settings.rr_alpha {
-            let m_d = diffuse[mat_idx];
-            let m_s = specular[mat_idx];
-
             let sample = pcg_next_square(&pcg);
             let w_o = bsdf_sample_phong(sample, isec.w_i, isec.n);
             let pdf = bsdf_pdf_phong(w_o);
@@ -90,6 +90,28 @@ fn handle_intersections(
                 delta + result_color.rgb,
                 result_color.a
             );
+        } else {
+            let sample = pcg_next_square(&pcg);
+            let light_sample = nee_sample(sample);
+            var direction = light_sample.position - isec.pos;
+            let distance = length(direction);
+            direction = direction / distance;
+
+            let f = bsdf_eval_phong(m_d, m_s, 1.0, isec.w_i, isec.n, direction);
+            let weight = isec.weight * f / light_sample.pdf * dot(isec.n, direction);
+            if length(weight) > EPSILON {
+                var nee_ray: Ray;
+                nee_ray.origin = isec.pos + EPSILON * direction;
+                nee_ray.direction = direction;
+                nee_ray.weight = weight;
+                nee_ray.primary_ray = isec.primary_ray;
+                nee_ray.t_min = 0.01;
+                nee_ray.t_max = distance - 0.01;
+                nee_ray.ray_type = 2u; // NEE ray
+
+                let ray_index = atomicAdd(&wg_num_rays, 1u);
+                wg_rays[ray_index] = nee_ray;
+            }
         }
     }
 

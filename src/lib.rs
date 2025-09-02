@@ -264,15 +264,17 @@ impl Aurora {
         let mut queries = self.timestamp_queries.begin(&gpu);
         let mut command_buffers = Vec::new();
 
-        let scene_result = {
-            let mut scene = scene_handle.try_borrow_mut().unwrap();
-            scene.render(render_gpu, render_target, &mut queries)
-        };
+        if !self.get_window().ui_context.pause_rendering {
+            let scene_result = {
+                let mut scene = scene_handle.try_borrow_mut().unwrap();
+                scene.render(render_gpu, render_target, &mut queries)
+            };
 
-        if let Ok(mut cmds) = scene_result {
-            command_buffers.append(&mut cmds);
-        } else if let Err(e) = scene_result {
-            error!(target: "aurora", "Scene render error: {e}");
+            if let Ok(mut cmds) = scene_result {
+                command_buffers.append(&mut cmds);
+            } else if let Err(e) = scene_result {
+                error!(target: "aurora", "Scene render error: {e}");
+            }
         }
 
         let (surface_texture, view) = self.create_surface_texture();
@@ -665,6 +667,7 @@ struct UiContext {
     renderer: egui_wgpu::Renderer,
     state: egui_winit::State,
     show_performance_window: bool,
+    pause_rendering: bool,
 }
 
 impl UiContext {
@@ -680,6 +683,7 @@ impl UiContext {
             renderer,
             state,
             show_performance_window: false,
+            pause_rendering: false,
         }
     }
 
@@ -720,6 +724,16 @@ impl UiContext {
                         .resizable(true)
                         .show(ctx, |ui| {
                             egui::ScrollArea::both().show(ui, |ui| {
+                                ui.button(if self.pause_rendering {
+                                    "Resume Rendering"
+                                } else {
+                                    "Pause Rendering"
+                                })
+                                .clicked()
+                                .then(|| {
+                                    self.pause_rendering = !self.pause_rendering;
+                                });
+
                                 ui.checkbox(
                                     &mut self.show_performance_window,
                                     "Show Performance Window",

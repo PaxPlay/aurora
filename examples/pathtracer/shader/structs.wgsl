@@ -41,6 +41,7 @@ struct InvocationSchedule {
     ray_intersection_groups: vec4<u32>,
     handle_intersections_groups: vec4<u32>,
     reorder_intersections_groups: vec4<u32>,
+    nee_miss_groups: vec4<u32>,
 }
 
 struct ScheduleShade {
@@ -62,6 +63,11 @@ struct ScheduleReorder {
     index_in_event: array<atomic<u32>, 16>, // only used in reorder to determine indices, should equal num_events after
     event_type_start: array<u32, 16>, // determined by schedule, used by reorder and shade
     intersect_invocations: u32,
+}
+
+struct ScheduleNEE {
+    nee_invocations: u32,
+    nee_start: u32,
 }
 
 struct SceneGeometrySizes {

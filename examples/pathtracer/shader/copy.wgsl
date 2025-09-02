@@ -12,8 +12,7 @@
 @group(2) @binding(1) var<storage, read_write> output_buffer_f16: array<u32>; // pack with pack2x16float
 
 @group(3) @binding(0) var<storage, read_write> schedule: InvocationSchedule;
-@group(3) @binding(1) var<storage, read_write> schedule_intersect: ScheduleIntersect;
-@group(3) @binding(2) var<storage, read_write> schedule_shade: ScheduleShade;
+@group(3) @binding(1) var<storage, read_write> schedule_reorder: ScheduleReorder;
 
 @compute
 @workgroup_size(16, 16, 1)
@@ -33,45 +32,47 @@ fn copy_target(
                 break;
             }
             case 1u: { // incidence
-                let num_rays = schedule_shade.shade_invocations;
+                let num_rays = schedule_reorder.num_events[8u];
                 if gidx < num_rays {
-                    let isec = ray_intersections[gidx];
+                    let isec = ray_intersections[gidx + schedule_reorder.event_type_start[8u]];
                     index = isec.primary_ray;
-                    result_color = vec4(isec.w_i * 0.5 + vec3(0.5), 1.0);
+                    // result_color = vec4(isec.w_i * 0.5 + vec3(0.5), 1.0);
+                    let dumb = f32(isec.event_type);
+                    result_color = vec4(vec3(dumb / 10.0), 1.0);
                 }
                 break;
             }
             case 2u: { // normal
-                let num_rays = schedule_shade.shade_invocations;
+                let num_rays = schedule_reorder.num_events[8u];
                 if gidx < num_rays {
-                    let isec = ray_intersections[gidx];
+                    let isec = ray_intersections[gidx + schedule_reorder.event_type_start[8u]];
                     index = isec.primary_ray;
                     result_color = vec4(isec.n * 0.5 + vec3(0.5), 1.0);
                 }
                 break;
             }
-            case 3u: { // w_o
-                let num_rays = schedule_intersect.intersect_invocations;
-                if gidx < num_rays {
-                    let ray = rays[gidx];
-                    index = ray.primary_ray;
-                    result_color = vec4(ray.direction * 0.5 + vec3(0.5), 1.0);
-                }
-                break;
-            }
-            case 4u { // weight
-                let num_rays = schedule_intersect.intersect_invocations;
-                if gidx < num_rays {
-                    let ray = rays[gidx];
-                    index = ray.primary_ray;
-                    result_color = vec4(ray.weight * 0.5 + vec3(0.5), 1.0);
-                }
-                break;
-            }
+            // case 3u: { // w_o
+            //     let num_rays = schedule_intersect.intersect_invocations;
+            //     if gidx < num_rays {
+            //         let ray = rays[gidx];
+            //         index = ray.primary_ray;
+            //         result_color = vec4(ray.direction * 0.5 + vec3(0.5), 1.0);
+            //     }
+            //     break;
+            // }
+            // case 4u { // weight
+            //     let num_rays = schedule_intersect.intersect_invocations;
+            //     if gidx < num_rays {
+            //         let ray = rays[gidx];
+            //         index = ray.primary_ray;
+            //         result_color = vec4(ray.weight * 0.5 + vec3(0.5), 1.0);
+            //     }
+            //     break;
+            // }
             case 5u { // t
-                let num_rays = schedule_shade.shade_invocations;
+                let num_rays = schedule_reorder.num_events[8u];
                 if gidx < num_rays {
-                    let isec = ray_intersections[gidx];
+                    let isec = ray_intersections[gidx + schedule_reorder.event_type_start[8u]];
                     index = isec.primary_ray;
                     result_color = vec4(vec3(isec.t / 1500), 1.0);
                 }
