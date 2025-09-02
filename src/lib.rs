@@ -676,7 +676,7 @@ impl UiContext {
 
         let context = egui::Context::default();
         let viewport_id = context.viewport_id();
-        let state = egui_winit::State::new(context, viewport_id, &window, None, None, None);
+        let state = egui_winit::State::new(context, viewport_id, &window, Some(1.0), None, None);
 
         Self {
             window,
