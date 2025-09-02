@@ -81,7 +81,7 @@ impl Default for PathTracerSettings {
             max_iterations: 10,
             output_buffer: 0,
             accumulate: 1,
-            nee: 0,
+            nee: 1,
             rr_alpha: 0.8,
         }
     }
@@ -178,12 +178,12 @@ impl PathTracerView {
         // Twice the amount to accomodate rays from the previous frame
         let ray_intersection_buffers: [Buffer<f32>; 2] = [
             gpu.create_buffer(
-                "ray_intersections",
+                "ray_intersections_0",
                 80 * 2 * total_pixels,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
             gpu.create_buffer(
-                "ray_intersections",
+                "ray_intersections_1",
                 80 * 2 * total_pixels,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             ),
@@ -996,10 +996,6 @@ impl Scene3dView for PathTracerView {
         self.should_clear |= ui.button("Clear Buffer").clicked();
         if ui.button("Get Screenshot").clicked() {
             self.screenshot();
-        }
-
-        if ui.button("panic").clicked() {
-            panic!("User induced panic");
         }
 
         if ui.button("buffer_check").clicked() {

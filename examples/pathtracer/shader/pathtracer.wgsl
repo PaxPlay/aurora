@@ -50,6 +50,8 @@ fn handle_intersections(
         atomicStore(&wg_num_rays, 0u);
     }
 
+    workgroupBarrier();
+
     let total_num_intersections = schedule.shade_invocations;
     if gid.x < total_num_intersections {
         let isec = ray_intersections[schedule.isec_start + gid.x];
@@ -98,7 +100,8 @@ fn handle_intersections(
             direction = direction / distance;
 
             let f = bsdf_eval_phong(m_d, m_s, 1.0, isec.w_i, isec.n, direction);
-            let weight = isec.weight * f / light_sample.pdf * dot(isec.n, direction);
+            let weight = light_sample.radiance * isec.weight * f / light_sample.pdf
+                * max(dot(isec.n, direction) * dot(-direction, light_sample.surface_normal), 0.0) / (distance * distance);
             if length(weight) > EPSILON {
                 var nee_ray: Ray;
                 nee_ray.origin = isec.pos + EPSILON * direction;
@@ -123,8 +126,11 @@ fn handle_intersections(
     }
 
     workgroupBarrier();
-
-    if lidx < atomicLoad(&wg_num_rays) {
+    let num_rays = atomicLoad(&wg_num_rays);
+    if lidx < num_rays {
         rays[wg_ray_buffer_start + lidx] = wg_rays[lidx];
+    }
+    if lidx + 128 < num_rays {
+        rays[wg_ray_buffer_start + lidx + 128] = wg_rays[lidx + 128];
     }
 }

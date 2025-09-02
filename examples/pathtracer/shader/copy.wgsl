@@ -36,9 +36,7 @@ fn copy_target(
                 if gidx < num_rays {
                     let isec = ray_intersections[gidx + schedule_reorder.event_type_start[8u]];
                     index = isec.primary_ray;
-                    // result_color = vec4(isec.w_i * 0.5 + vec3(0.5), 1.0);
-                    let dumb = f32(isec.event_type);
-                    result_color = vec4(vec3(dumb / 10.0), 1.0);
+                    result_color = vec4(isec.w_i * 0.5 + vec3(0.5), 1.0);
                 }
                 break;
             }

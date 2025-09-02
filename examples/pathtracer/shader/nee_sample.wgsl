@@ -2,6 +2,7 @@ struct NEESample {
     position: vec3<f32>,
     radiance: vec3<f32>,
     pdf: f32,
+    surface_normal: vec3<f32>
 }
 
 // Sample any light source uniformly
@@ -17,5 +18,6 @@ fn nee_sample(sample: vec2<f32>) -> NEESample {
     nee_sample.position = A + sample.x * E1 + sample.y * E2;
     nee_sample.radiance = vec3(20.0);
     nee_sample.pdf = 1.0 / length(cross(E1, E2));
+    nee_sample.surface_normal = normalize(cross(E1, E2));
     return nee_sample;
 }

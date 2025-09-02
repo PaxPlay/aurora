@@ -59,6 +59,7 @@ fn intersect_rays(
         isec.pos = vec3<f32>(-1.0, -1.0, -1.0);
         isec.t = ray.t_max;
         isec.primary_ray = ray.primary_ray;
+        isec.weight = ray.weight;
 
         for (var i: u32; i < num_triangles; i++) {
             // https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
@@ -100,8 +101,6 @@ fn intersect_rays(
                     isec.n = -1.0 * isec.n;
                 }
                 isec.w_i = normalize(-ray.direction);
-                isec.weight = ray.weight;
-                isec.primary_ray = ray.primary_ray;
             }
         }
 
