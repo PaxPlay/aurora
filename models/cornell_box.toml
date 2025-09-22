@@ -1,0 +1,13 @@
+name = "Cornell Box"
+
+[camera]
+position = [278.0, 273.0, -800.0]
+angle = [1.5707963267948966, -1.5707963267948966, 0.0]
+fov = 39.3
+near = 500.0
+far = 2000.0
+
+[[models]]
+type = "WavefrontObj"
+file = "cornell_box.obj"
+

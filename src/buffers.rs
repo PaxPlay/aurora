@@ -188,7 +188,7 @@ impl BufferConvertCopy {
         register_default!(
             gpu.shaders,
             "convert_f32_f16",
-            "shader/buffer_convert_f32_f16.wgsl"
+            "buffer_convert_f32_f16.wgsl"
         );
 
         let pipeline_layout = gpu

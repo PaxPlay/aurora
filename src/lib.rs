@@ -41,6 +41,9 @@ struct Args {
 
     #[arg(short, long)]
     format: Option<String>,
+
+    #[arg(long)]
+    headless: Option<String>,
 }
 
 /// Central Aurora context
@@ -187,6 +190,11 @@ impl Aurora {
     }
 
     pub fn run(&mut self) -> Result<(), winit::error::EventLoopError> {
+        if let Some(jobs_file) = self.args.headless.as_ref() {
+            self.run_headless(jobs_file.clone());
+            return Ok(());
+        }
+
         info!(target: "aurora", "Running Aurora in windowed mode!");
 
         let mut event_loop_builder = winit::event_loop::EventLoop::builder();
@@ -202,8 +210,9 @@ impl Aurora {
         Ok(())
     }
 
-    pub fn run_headless(&mut self) {
+    fn run_headless(&mut self, jobs_file: String) {
         info!(target: "aurora", "Running Aurora in headless mode!");
+        info!(target: "aurora", "Loading jobs from file \"{jobs_file}\"");
         todo!()
     }
 

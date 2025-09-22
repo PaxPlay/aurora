@@ -23,7 +23,7 @@ fn main() {
 
 async fn main_async() {
     let mut aurora = Aurora::new().await.unwrap();
-    let scene_geometry = SceneGeometry::new("cornell_box.obj", aurora.get_gpu()).await;
+    let scene_geometry = SceneGeometry::new("cornell_box.toml", aurora.get_gpu()).await;
     let mut scene = BasicScene3d::new(scene_geometry, aurora.get_gpu(), aurora.get_target());
     scene.add_view(
         "path_tracer",

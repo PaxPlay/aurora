@@ -1,13 +1,14 @@
 use glam::vec3;
 use glam::{Mat4, UVec2, Vec3, Vec4};
 
+use serde::{Deserialize, Serialize};
+
 use log::info;
 
 use crate::buffers::{Buffer, BufferCopyContext, BufferCopyUtil};
 use crate::shader::{BindGroupLayout, BindGroupLayoutBuilder, RenderPipeline};
 use crate::{
-    register_default, render_pipeline, CommandEncoderTimestampExt, DebugUi, GpuContext,
-    RenderTarget, TimestampQueries,
+    register_default, render_pipeline, DebugUi, GpuContext, RenderTarget, TimestampQueries,
 };
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -29,9 +30,9 @@ pub enum SceneRenderError {
 pub trait Scene {
     fn render(
         &mut self,
-        gpu: Arc<GpuContext>,
-        target: Arc<RenderTarget>,
-        queries: &mut TimestampQueries,
+        _gpu: Arc<GpuContext>,
+        _target: Arc<RenderTarget>,
+        _queries: &mut TimestampQueries,
     ) -> Result<Vec<wgpu::CommandBuffer>, SceneRenderError> {
         Ok(vec![])
     }
@@ -41,7 +42,7 @@ pub trait Scene {
     fn update_target_parameters(&mut self, _gpu: Arc<GpuContext>, _target: Arc<RenderTarget>) {}
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Angle {
     pitch: f32,
     yaw: f32,
@@ -79,7 +80,7 @@ impl Angle {
     }
 
     fn normalize(self) -> Self {
-        let mut res = self.clone();
+        let mut res = self;
         while res.pitch > PI {
             res.pitch -= 2.0f32 * PI;
         }
@@ -113,6 +114,8 @@ impl Angle {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum Camera3d {
     Centered {
         position: Vec3,
@@ -170,7 +173,7 @@ impl Camera3d {
                 Mat4::perspective_lh(fov.to_radians(), *aspect_ratio, *near, *far)
                     * Mat4::look_at_lh(
                         position - angle.direction() * distance,
-                        position.clone(),
+                        *position,
                         angle.up(),
                     )
             }
@@ -183,7 +186,7 @@ impl Camera3d {
                 aspect_ratio,
             } => {
                 Mat4::perspective_lh(fov.to_radians(), *aspect_ratio, *near, *far)
-                    * Mat4::look_at_lh(position.clone(), position + angle.direction(), angle.up())
+                    * Mat4::look_at_lh(*position, position + angle.direction(), angle.up())
             }
             Camera3d::Orthographic {
                 position,
@@ -196,7 +199,7 @@ impl Camera3d {
                 let right = zoom * aspect_ratio;
 
                 Mat4::orthographic_lh(-right, right, -zoom, *zoom, *near, *far)
-                    * Mat4::look_at_lh(position.clone(), position + angle.direction(), angle.up())
+                    * Mat4::look_at_lh(*position, position + angle.direction(), angle.up())
             }
         }
     }
@@ -544,6 +547,68 @@ impl DebugUi for Angle {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct SceneDefinition {
+    name: String,
+    camera: CameraDefinition,
+    models: Vec<ModelDefinition>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CameraDefinition {
+    position: [f32; 3],
+    angle: [f32; 3],
+    fov: f32,
+    near: f32,
+    far: f32,
+}
+
+impl Default for CameraDefinition {
+    fn default() -> Self {
+        Self {
+            position: [0.0, 0.0, 0.0],
+            angle: [0.0, 0.0, 0.0],
+            fov: 60.0f32,
+            near: 1e-5f32,
+            far: 1e10f32,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum ModelDefinition {
+    WavefrontObj { file: String },
+}
+
+impl ModelDefinition {
+    async fn load(&self, gpu: &GpuContext) -> (Vec<tobj::Model>, Vec<tobj::Material>) {
+        match self {
+            Self::WavefrontObj { file } => {
+                let mut obj_data = gpu
+                    .filesystem
+                    .create_reader(&format!("models/{file}"))
+                    .await;
+                let load_result = tobj::futures::load_obj_buf(
+                    &mut obj_data,
+                    &tobj::GPU_LOAD_OPTIONS,
+                    async |path| {
+                        let file = format!("models/{}", path.display());
+                        let mut file = gpu.filesystem.create_reader(&file).await;
+                        tobj::futures::load_mtl_buf(&mut file).await
+                    },
+                )
+                .await;
+
+                let (models, materials) =
+                    load_result.expect(format!("Unable to load obj file for {}", file).as_str());
+                let materials = materials.expect("Failed to fetch material file");
+                (models, materials)
+            }
+        }
+    }
+}
+
 pub struct SceneGeometry {
     pub vertices: Vec<f32>,
     pub indices: Vec<u32>,
@@ -558,21 +623,14 @@ impl SceneGeometry {
     pub async fn new(file: &str, gpu: Arc<GpuContext>) -> Self {
         info!(target: "aurora", "Loading scene geometry from file \"{file}\"");
 
-        let mut obj_data = gpu
+        let scene_file = gpu
             .filesystem
             .create_reader(&format!("models/{file}"))
             .await;
-        let load_result =
-            tobj::futures::load_obj_buf(&mut obj_data, &tobj::GPU_LOAD_OPTIONS, async |path| {
-                let file = format!("models/{}", path.display());
-                let mut file = gpu.filesystem.create_reader(&file).await;
-                tobj::futures::load_mtl_buf(&mut file).await
-            })
-            .await;
+        let scene_definition = toml::from_slice::<SceneDefinition>(&scene_file.into_inner())
+            .expect("Failed parsing scene definition");
 
-        let (models, materials) =
-            load_result.expect(format!("Unable to load obj file for {}", file).as_str());
-        let materials = materials.expect("Materials are missing");
+        let (models, materials) = scene_definition.models[0].load(&gpu).await;
         info!(target: "aurora", "Models: {}, Materials: {}", models.len(), materials.len());
 
         let mut vertices = Vec::new();
@@ -870,7 +928,7 @@ impl BasicScene3d {
 
         let gpu_scene_geometry = GpuSceneGeometry::from(&scene_geometry, gpu.clone());
 
-        register_default!(gpu.shaders, "wireframe", "shader/wireframe.wgsl");
+        register_default!(gpu.shaders, "wireframe", "wireframe.wgsl");
 
         let buffer_copy_util = BufferCopyUtil::new(2048);
 
