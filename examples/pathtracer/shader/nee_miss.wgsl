@@ -13,10 +13,12 @@ fn nee_miss(
     @builtin(global_invocation_id) gid: vec3<u32>,
 ) {
     if gid.x < schedule.nee_invocations {
-        let isec = ray_intersections[gid.x + schedule.nee_start];
-        let primary_ray = primary_rays[isec.primary_ray];
-        primary_rays[isec.primary_ray].result_color.r += isec.weight.r;
-        primary_rays[isec.primary_ray].result_color.g += isec.weight.g;
-        primary_rays[isec.primary_ray].result_color.b += isec.weight.b;
+        let primary_ray = ray_intersections[gid.x + schedule.nee_start].primary_ray;
+        let weight = ray_intersections[gid.x + schedule.nee_start].weight;
+        var color = primary_rays[primary_ray].result_color;
+        color.r += weight.r;
+        color.g += weight.g;
+        color.b += weight.b;
+        primary_rays[primary_ray].result_color = color;
     }
 }
