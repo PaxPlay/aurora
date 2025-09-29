@@ -49,24 +49,26 @@ fn copy_target(
                 }
                 break;
             }
-            // case 3u: { // w_o
-            //     let num_rays = schedule_intersect.intersect_invocations;
-            //     if gidx < num_rays {
-            //         let ray = rays[gidx];
-            //         index = ray.primary_ray;
-            //         result_color = vec4(ray.direction * 0.5 + vec3(0.5), 1.0);
-            //     }
-            //     break;
-            // }
-            // case 4u { // weight
-            //     let num_rays = schedule_intersect.intersect_invocations;
-            //     if gidx < num_rays {
-            //         let ray = rays[gidx];
-            //         index = ray.primary_ray;
-            //         result_color = vec4(ray.weight * 0.5 + vec3(0.5), 1.0);
-            //     }
-            //     break;
-            // }
+            case 3u: { // w_o
+                let num_ignored = schedule_reorder.index_in_event[7];
+                let num_rays = schedule_reorder.intersect_invocations - num_ignored;
+                if gidx < num_rays {
+                    let ray = rays[num_ignored + gidx];
+                    index = ray.primary_ray;
+                    result_color = vec4(ray.direction * 0.5 + vec3(0.5), 1.0);
+                }
+                break;
+            }
+            case 4u { // weight
+                let num_ignored = schedule_reorder.index_in_event[7];
+                let num_rays = schedule_reorder.intersect_invocations - num_ignored;
+                if gidx < num_rays {
+                    let ray = ray_intersections[num_ignored + gidx];
+                    index = ray.primary_ray;
+                    result_color = vec4(ray.weight * 0.5 + vec3(0.5), 1.0);
+                }
+                break;
+            }
             case 5u { // t
                 let num_rays = schedule_reorder.num_events[8u];
                 if gidx < num_rays {

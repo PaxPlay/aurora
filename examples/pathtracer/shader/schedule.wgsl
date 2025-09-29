@@ -31,7 +31,7 @@ fn schedule_invocations(
         );
         schedule_intersect.intersect_invocations = num_rays;
 
-        let num_intersections = num_events[8] + num_events[3];
+        let num_intersections = num_events[8] + num_events[0];
         schedule.handle_intersections_groups = vec4<u32>(
             (num_intersections + 127u) / 128u,
             1u,
@@ -65,8 +65,8 @@ fn schedule_invocations(
 
     if lidx == 0u {
         // primary hits should already be handled, exclude from reordering 
-        num_events[8] += num_events[3]; // TODO: bsdf index
-        num_events[3] = 0u;
+        num_events[8] += num_events[0]; // TODO: bsdf index
+        num_events[0] = 0u;
     }
 
     if lidx < 15u {

@@ -37,7 +37,7 @@ fn handle_primary(
         let idx = camera.resolution.x * gid.y + gid.x;
         let isec = ray_intersections[idx];
 
-        if isec.event_type == 3u {
+        if isec.event_type == 0u {
             primary_rays[idx].result_color.a += 1.0; // count number of primary hits
 
             // NEE requires ambient light to be added here

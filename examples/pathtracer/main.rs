@@ -875,14 +875,14 @@ impl Scene3dView for PathTracerView {
                         .expect("Could not cast schedule reorder data from u8 to u32");
                     for i in 0..(iterations + 1) as usize {
                         let num_events = &data_u32[64 * i..64 * i + 16];
-                        let event_type_start = &data_u32[64 * i + 32..64 * i + 48];
+                        //let event_type_start = &data_u32[64 * i + 32..64 * i + 48];
                         let intersect_invocations = data_u32[64 * i + 48];
-                        // log::info!(
-                        //     target: "aurora",
-                        //     "Iteration {i}: invocations: {:>8}, miss: {:>8}, nee_hit: {:>8}, nee_miss: {:>8}, primary_hit: {:>8}, shade: {:?}, event_type_start: {:?}",
-                        //     intersect_invocations, num_events[0], num_events[1], num_events[2], num_events[3],
-                        //     &num_events[8..], event_type_start,
-                        // );
+                        //log::info!(
+                        //    target: "aurora",
+                        //    "Iteration {i}: invocations: {:>8}, miss: {:>8}, nee_hit: {:>8}, nee_miss: {:>8}, primary_hit: {:>8}, shade: {:?}",
+                        //    intersect_invocations, num_events[7], num_events[1], num_events[2], num_events[0],
+                        //    &num_events[8..]
+                        //);
                     }
                 }
             },

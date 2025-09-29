@@ -51,8 +51,7 @@ fn intersect_rays(
     }
 
     workgroupBarrier();
-    var event_type: u32 = 0u; // 0: miss, 1: nee_hit, 2: nee_miss, 3: primary_hit,
-                              // 4..7: reserved, 8..: intersection with bsdf id
+    var event_type: u32 = 7u; // regular_miss; type definitions in structs.wgsl
 
     if gid.x < num_rays {
         var isec: RayIntersectionData;
@@ -114,7 +113,7 @@ fn intersect_rays(
                 event_type = 1u;
             } else if ray.ray_type == 0u {
                 // Primary ray hit
-                event_type = 3u;
+                event_type = 0u;
             }
         } else {
             if ray.ray_type == 2u {

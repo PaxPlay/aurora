@@ -33,8 +33,8 @@ struct RayIntersectionData {
     t: f32,
     surface_id: u32,
     primary_ray: u32,
-    event_type: u32, // 0: miss, 1: nee_hit, 2: nee_miss, 3: primary_hit,
-                     // 4..7: reserved, 8..: intersection with bsdf id
+    event_type: u32, // 0: primary_hit, 1: nee_hit, 2: nee_miss, 3..6: reserved
+                     // 7: regular_miss, 8..: intersection with bsdf id
 }
 
 struct InvocationSchedule {
