@@ -50,7 +50,7 @@ fn copy_target(
                 break;
             }
             case 3u: { // w_o
-                let num_ignored = schedule_reorder.index_in_event[7];
+                let num_ignored = atomicLoad(&schedule_reorder.index_in_event[7]);
                 let num_rays = schedule_reorder.intersect_invocations - num_ignored;
                 if gidx < num_rays {
                     let ray = rays[num_ignored + gidx];
@@ -60,7 +60,7 @@ fn copy_target(
                 break;
             }
             case 4u { // weight
-                let num_ignored = schedule_reorder.index_in_event[7];
+                let num_ignored = atomicLoad(&schedule_reorder.index_in_event[7]);
                 let num_rays = schedule_reorder.intersect_invocations - num_ignored;
                 if gidx < num_rays {
                     let ray = ray_intersections[num_ignored + gidx];
