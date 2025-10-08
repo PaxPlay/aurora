@@ -3,11 +3,15 @@ use aurora::{
     compute_pipeline, dispatch_size, register_default,
     scenes::{BasicScene3d, Scene3dView, SceneGeometry, SceneRenderError},
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
-    Aurora, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
+    Aurora, CircularBuffer, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
 use log::{info, warn};
 use rand::Rng;
-use std::{num::NonZero, ops::DerefMut, sync::Arc};
+use std::{
+    num::NonZero,
+    ops::DerefMut,
+    sync::{Arc, Mutex},
+};
 
 fn main() {
     cfg_if::cfg_if! {
@@ -124,6 +128,84 @@ impl PathTracerSettings {
     }
 }
 
+struct PathTracerStats {
+    event_counts: [CircularBuffer<u32>; 16],
+}
+
+impl PathTracerStats {
+    fn new(buffer_size: usize) -> Self {
+        let event_counts = (0..16)
+            .map(|_| CircularBuffer::new(buffer_size))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        Self { event_counts }
+    }
+
+    fn push(&mut self, counts: &[u32]) {
+        assert!(counts.len() == 16);
+
+        for i in 0..16 {
+            self.event_counts[i].push(counts[i]);
+        }
+    }
+
+    fn labels() -> [String; 16] {
+        let mut labels = Vec::with_capacity(16);
+        labels.push("Primary Hit".to_string());
+        labels.push("NEE Hit".to_string());
+        labels.push("NEE Miss".to_string());
+        for i in 3..7 {
+            labels.push(format!("<reserved>{}", i));
+        }
+        labels.push("Miss".to_string());
+        for i in 0..8 {
+            labels.push(format!("Shade {}", i));
+        }
+        labels.try_into().unwrap()
+    }
+
+    fn plot_events(&self, ui: &mut egui::Ui) -> egui::Response {
+        use egui_plot::{Bar, BarChart, Legend, Plot};
+        const BAR_WIDTH: f64 = 1.0;
+
+        let mut charts = Vec::new();
+        let labels = Self::labels();
+
+        for (i, label) in labels.iter().enumerate() {
+            let series = &self.event_counts[i];
+            let mut values = Vec::new();
+            let mut max = 0u32;
+            for j in 0..series.len() {
+                if let Some(v) = series.get(j) {
+                    max = max.max(*v);
+                    values.push(Bar::new(j as f64 * BAR_WIDTH, *v as f64));
+                }
+            }
+
+            if max == 0 {
+                continue;
+            }
+
+            let others: Vec<&BarChart> = charts.iter().collect();
+            let bar = BarChart::new(label, values)
+                .name(label)
+                .width(BAR_WIDTH)
+                .stack_on(&others);
+            charts.push(bar);
+        }
+
+        Plot::new("path_tracer_stats")
+            .legend(Legend::default())
+            .show(ui, |plot_ui| {
+                for chart in charts {
+                    plot_ui.bar_chart(chart);
+                }
+            })
+            .response
+    }
+}
+
 struct PathTracerView {
     gpu: Arc<GpuContext>,
     schedule_pipeline: ComputePipeline,
@@ -155,6 +237,7 @@ struct PathTracerView {
     should_clear: bool,
     settings: MirroredBuffer<PathTracerSettings>,
     buffer_schedule_reorder: Buffer<u32>,
+    stats: Arc<Mutex<PathTracerStats>>,
 }
 
 impl PathTracerView {
@@ -197,7 +280,7 @@ impl PathTracerView {
 
         let seed_buffer: Buffer<u32> = gpu.create_buffer(
             "pt_seeds",
-            64,
+            256,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         );
 
@@ -580,6 +663,8 @@ impl PathTracerView {
             cache: None,
         });
 
+        let stats = Arc::new(Mutex::new(PathTracerStats::new(64)));
+
         Self {
             gpu,
             schedule_pipeline,
@@ -611,6 +696,7 @@ impl PathTracerView {
             should_clear: true,
             settings,
             buffer_schedule_reorder,
+            stats,
         }
     }
 
@@ -845,7 +931,7 @@ impl PathTracerView {
 impl Scene3dView for PathTracerView {
     fn copy(&mut self, gpu: Arc<GpuContext>) -> Vec<wgpu::CommandBuffer> {
         // rust is fun some times
-        let seeds: Vec<_> = self.rng.clone().random_iter::<u32>().take(16).collect();
+        let seeds: Vec<_> = self.rng.clone().random_iter::<u32>().take(64).collect();
         // let mut seeds: Vec<u32> = Vec::with_capacity(16);
         // seeds.resize(16, 0);
 
@@ -864,6 +950,7 @@ impl Scene3dView for PathTracerView {
         }
 
         let iterations = self.settings[0].max_iterations;
+        let stats = self.stats.clone();
         wgpu::util::DownloadBuffer::read_buffer(
             &gpu.device,
             &gpu.queue,
@@ -875,14 +962,20 @@ impl Scene3dView for PathTracerView {
                         .expect("Could not cast schedule reorder data from u8 to u32");
                     for i in 0..(iterations + 1) as usize {
                         let num_events = &data_u32[64 * i..64 * i + 16];
-                        //let event_type_start = &data_u32[64 * i + 32..64 * i + 48];
+                        let event_type_start = &data_u32[64 * i + 32..64 * i + 48];
                         let intersect_invocations = data_u32[64 * i + 48];
-                        //log::info!(
-                        //    target: "aurora",
-                        //    "Iteration {i}: invocations: {:>8}, miss: {:>8}, nee_hit: {:>8}, nee_miss: {:>8}, primary_hit: {:>8}, shade: {:?}",
-                        //    intersect_invocations, num_events[7], num_events[1], num_events[2], num_events[0],
-                        //    &num_events[8..]
-                        //);
+                        log::info!(
+                           target: "aurora",
+                           "Iteration {i}: invocations: {:>8}, miss: {:>8}, nee_hit: {:>8}, nee_miss: {:>8}, primary_hit: {:>8}, shade: {:?}",
+                           intersect_invocations, num_events[7], num_events[1], num_events[2], num_events[0],
+                           &num_events[8..]
+                        );
+                        log::info!(
+                            target: "aurora",
+                            "event type start: {:?}",
+                            event_type_start
+                        );
+                        stats.lock().unwrap().push(num_events);
                     }
                 }
             },
@@ -1003,5 +1096,7 @@ impl Scene3dView for PathTracerView {
         }
 
         self.should_clear |= self.settings[0].ui(ui);
+
+        self.stats.lock().unwrap().plot_events(ui);
     }
 }

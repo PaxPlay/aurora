@@ -273,7 +273,7 @@ impl Aurora {
         let mut queries = self.timestamp_queries.begin(&gpu);
         let mut command_buffers = Vec::new();
 
-        if !self.get_window().ui_context.pause_rendering {
+        if !self.get_window().ui_context.pause_rendering || self.get_window().ui_context.step {
             let scene_result = {
                 let mut scene = scene_handle.try_borrow_mut().unwrap();
                 scene.render(render_gpu, render_target, &mut queries)
@@ -677,6 +677,7 @@ struct UiContext {
     state: egui_winit::State,
     show_performance_window: bool,
     pause_rendering: bool,
+    step: bool,
 }
 
 impl UiContext {
@@ -693,6 +694,7 @@ impl UiContext {
             state,
             show_performance_window: false,
             pause_rendering: false,
+            step: false,
         }
     }
 
@@ -733,14 +735,21 @@ impl UiContext {
                         .resizable(true)
                         .show(ctx, |ui| {
                             egui::ScrollArea::both().show(ui, |ui| {
-                                ui.button(if self.pause_rendering {
-                                    "Resume Rendering"
-                                } else {
-                                    "Pause Rendering"
-                                })
-                                .clicked()
-                                .then(|| {
-                                    self.pause_rendering = !self.pause_rendering;
+                                ui.horizontal(|ui| {
+                                    ui.button(if self.pause_rendering {
+                                        "Resume Rendering"
+                                    } else {
+                                        "Pause Rendering"
+                                    })
+                                    .clicked()
+                                    .then(|| {
+                                        self.pause_rendering = !self.pause_rendering;
+                                    });
+
+                                    if !self.pause_rendering {
+                                        ui.disable();
+                                    }
+                                    self.step = ui.button("Step Frame").clicked();
                                 });
 
                                 ui.checkbox(
@@ -1141,7 +1150,7 @@ impl TimingResults {
     }
 }
 
-struct CircularBuffer<T> {
+pub struct CircularBuffer<T> {
     data: Vec<T>,
     capacity: usize,
     start: usize,
@@ -1149,7 +1158,7 @@ struct CircularBuffer<T> {
 }
 
 impl<T: Default + Clone> CircularBuffer<T> {
-    fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             data: vec![T::default(); capacity],
             capacity,
@@ -1158,7 +1167,7 @@ impl<T: Default + Clone> CircularBuffer<T> {
         }
     }
 
-    fn push(&mut self, value: T) {
+    pub fn push(&mut self, value: T) {
         if self.len < self.capacity {
             self.len += 1;
         } else {
@@ -1168,7 +1177,7 @@ impl<T: Default + Clone> CircularBuffer<T> {
         self.data[end] = value;
     }
 
-    fn get(&self, index: usize) -> Option<&T> {
+    pub fn get(&self, index: usize) -> Option<&T> {
         if index < self.len {
             Some(&self.data[(self.start + index) % self.capacity])
         } else {
@@ -1176,15 +1185,23 @@ impl<T: Default + Clone> CircularBuffer<T> {
         }
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.len
     }
 
-    fn last(&self) -> Option<&T> {
+    pub fn last(&self) -> Option<&T> {
         if self.len == 0 {
             None
         } else {
             self.get(self.len - 1)
         }
+    }
+}
+
+impl<T: Default + Clone + std::fmt::Debug> std::fmt::Debug for CircularBuffer<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries((0..self.len).map(|i| self.get(i).unwrap()))
+            .finish()
     }
 }

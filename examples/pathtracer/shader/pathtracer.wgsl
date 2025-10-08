@@ -67,7 +67,8 @@ fn handle_intersections(
     var pcg: PCG;
 
     if gid.x < total_num_intersections {
-        pcg = pcg_seed(rng_seeds[schedule.rng_seed_index], ray_intersections[schedule.isec_start + gid.x].primary_ray);
+        pcg = pcg_seed(rng_seeds[schedule.rng_seed_index],
+            ray_intersections[schedule.isec_start + gid.x].primary_ray);
 
         let xi = pcg_next_f32(&pcg);
         if xi <= settings.rr_alpha {
