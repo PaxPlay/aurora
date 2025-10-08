@@ -10,4 +10,3 @@ far = 2000.0
 [[models]]
 type = "WavefrontObj"
 file = "cornell_box.obj"
-

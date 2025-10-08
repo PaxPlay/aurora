@@ -110,11 +110,10 @@ fn handle_intersections(
 
         let weight = isec.weight * f / pdf / settings.rr_alpha * dot(isec.n, w_o);
         var secondary_ray: Ray;
-        secondary_ray.origin = isec.pos + EPSILON * w_o;
+        secondary_ray.origin = isec.pos + EPSILON * isec.n;
         secondary_ray.direction = w_o;
         secondary_ray.weight = weight;
         secondary_ray.primary_ray = isec.primary_ray;
-        secondary_ray.t_min = 0.01;
         secondary_ray.t_max = F32_MAX;
         secondary_ray.ray_type = 1u;
         rays[wg_ray_buffer_start + lidx] = secondary_ray;
@@ -145,11 +144,10 @@ fn handle_intersections(
             let scalar = max(dot(isec.n, direction) * dot(-direction, light_sample.surface_normal), 0.0) / (distance * distance) / light_sample.pdf;
             let weight = light_sample.radiance * isec.weight * bsdf_eval_phong(mat_idx, isec.w_i, isec.n, direction) * scalar;
             if length(weight) > EPSILON {
-                nee_ray.origin = isec.pos + EPSILON * direction;
+                nee_ray.origin = isec.pos + EPSILON * isec.n;
                 nee_ray.direction = direction;
                 nee_ray.weight = weight;
                 nee_ray.primary_ray = isec.primary_ray;
-                nee_ray.t_min = 0.01;
                 nee_ray.t_max = distance - 0.01;
                 nee_ray.ray_type = 2u; // NEE ray
 

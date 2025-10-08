@@ -43,7 +43,6 @@ fn generate_rays(
         ray.direction = ray_data.direction;
         ray.primary_ray = idx;
         ray.weight = vec3<f32>(1.0);
-        ray.t_min = 0.0;
         ray.t_max = F32_MAX;
         ray.ray_type = 0u; // primary
         rays[idx] = ray;

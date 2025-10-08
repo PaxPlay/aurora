@@ -17,22 +17,21 @@ struct PrimaryRayData {
 
 struct Ray {
     origin: vec3<f32>,
-    direction: vec3<f32>,
-    weight: vec3<f32>,
     primary_ray: u32,
-    t_min: f32,
+    direction: vec3<f32>,
     t_max: f32,
+    weight: vec3<f32>,
     ray_type: u32, // 0: primary, 1: regular, 2: NEE
 }
 
 struct RayIntersectionData {
     pos: vec3<f32>,
-    n: vec3<f32>,
-    w_i: vec3<f32>,
-    weight: vec3<f32>,
     t: f32,
+    n: vec3<f32>,
     surface_id: u32,
+    w_i: vec3<f32>,
     primary_ray: u32,
+    weight: vec3<f32>,
     event_type: u32, // 0: primary_hit, 1: nee_hit, 2: nee_miss, 3..6: reserved
                      // 7: regular_miss, 8..: intersection with bsdf id
 }
