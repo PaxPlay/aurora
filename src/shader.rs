@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::num::NonZero;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::buffers::Buffer;
@@ -112,14 +111,14 @@ impl DynamicShaderModuleHandle {
         return self.dynamic_module.borrow_mut().get_module();
     }
 
-    fn is_dynamic(&self) -> bool {
+    fn _is_dynamic(&self) -> bool {
         match self.dynamic_module.borrow().source {
             ShaderSource::Static(_) => false,
             ShaderSource::Dynamic { .. } => true,
         }
     }
 
-    fn invalidate(&self) {
+    fn _invalidate(&self) {
         self.dynamic_module.borrow_mut().invalidate()
     }
 }

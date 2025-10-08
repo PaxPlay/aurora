@@ -92,7 +92,7 @@ impl Aurora {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn panic_hook(panic_info: &std::panic::PanicInfo) {
+    fn panic_hook(panic_info: &std::panic::PanicHookInfo) {
         // #[wasm_bindgen]
         // extern "C" {
         //     #[wasm_bindgen(js_namespace = console)]
@@ -527,9 +527,9 @@ impl RenderTarget {
 
 pub struct AuroraWindow {
     gpu: Arc<GpuContext>,
-    window: Arc<Window>,
+    _window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    surface_format: wgpu::TextureFormat,
+    _surface_format: wgpu::TextureFormat,
     surface_config: wgpu::SurfaceConfiguration,
     ui_context: UiContext,
     target_view_pipeline: TargetViewPipeline,
@@ -620,9 +620,9 @@ impl AuroraWindow {
 
         Ok(Self {
             gpu,
-            window,
+            _window: window,
             surface,
-            surface_format,
+            _surface_format: surface_format,
             surface_config,
             ui_context,
             target_view_pipeline,
@@ -831,7 +831,10 @@ pub struct TimestampQueries {
 }
 
 impl TimestampQueries {
-    pub fn compute_pass_writes(&mut self, label: &str) -> Option<wgpu::ComputePassTimestampWrites> {
+    pub fn compute_pass_writes(
+        &mut self,
+        label: &str,
+    ) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
         let index = self.queries.len();
         self.queries.push(format!("bgn_{}", label.to_string()));
         self.queries.push(format!("end_{}", label.to_string()));
@@ -852,7 +855,10 @@ impl TimestampQueries {
         }
     }
 
-    pub fn render_pass_writes(&mut self, label: &str) -> Option<wgpu::RenderPassTimestampWrites> {
+    pub fn render_pass_writes(
+        &mut self,
+        label: &str,
+    ) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
         let index = self.queries.len();
         self.queries.push(format!("bgn_{}", label.to_string()));
         self.queries.push(format!("end_{}", label.to_string()));
@@ -1008,7 +1014,7 @@ impl ManagedTimestampQuerySet {
     }
 }
 
-struct TimingResults {
+pub struct TimingResults {
     labels: Vec<String>,
     series: Vec<CircularBuffer<f32>>,
 }

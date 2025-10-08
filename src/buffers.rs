@@ -142,7 +142,7 @@ impl BufferCopyContext<'_> {
 pub struct BufferConvertCopy {
     pipeline: ComputePipeline,
     bind_group: wgpu::BindGroup,
-    size_buffer: Buffer<u32>,
+    _size_buffer: Buffer<u32>,
     size: Option<NonZero<u32>>,
 }
 
@@ -211,7 +211,7 @@ impl BufferConvertCopy {
         Self {
             pipeline,
             bind_group,
-            size_buffer,
+            _size_buffer: size_buffer,
             size: NonZero::new(size),
         }
     }

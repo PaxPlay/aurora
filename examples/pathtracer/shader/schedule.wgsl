@@ -19,7 +19,13 @@ fn schedule_invocations(
     }
 
     if lidx == 0u {
-        schedule.reorder_intersections_groups = schedule.ray_intersection_groups;
+        let old_isec_groups = schedule.ray_intersection_groups;
+        schedule.reorder_intersections_groups = vec4<u32>(
+            old_isec_groups.x / 2u,
+            old_isec_groups.y,
+            old_isec_groups.z,
+            old_isec_groups.w,
+        );
         schedule_reorder.intersect_invocations = schedule_intersect.intersect_invocations;
 
         let num_rays = atomicLoad(&schedule_shade.num_rays);
