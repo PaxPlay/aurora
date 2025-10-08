@@ -21,7 +21,7 @@ fn schedule_invocations(
     if lidx == 0u {
         let old_isec_groups = schedule.ray_intersection_groups;
         schedule.reorder_intersections_groups = vec4<u32>(
-            old_isec_groups.x / 2u,
+            (old_isec_groups.x + 1) / 2u,
             old_isec_groups.y,
             old_isec_groups.z,
             old_isec_groups.w,
