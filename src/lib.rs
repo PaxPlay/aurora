@@ -583,6 +583,7 @@ impl AuroraWindow {
 
         let surface = gpu.instance.create_surface(window.clone())?;
         let capabilities = surface.get_capabilities(&gpu.adapter);
+        info!(target: "aurora", "Surface capabilities: {:?}", capabilities);
         let surface_format = capabilities
             .formats
             .iter()
@@ -608,11 +609,17 @@ impl AuroraWindow {
         surface.configure(&gpu.device, &surface_config);
         let ui_context = UiContext::new(&gpu, window.clone(), surface_format);
 
+        #[cfg(target_arch = "wasm32")]
+        const SRGB: bool = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        const SRGB: bool = false;
+
         let target_view_pipeline = TargetViewPipeline::new(
             gpu.clone(),
             render_target,
             surface_format,
             [size.width, size.height],
+            SRGB,
         );
         let buffer_copy_util = BufferCopyUtil::new(2048);
 

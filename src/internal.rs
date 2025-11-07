@@ -13,6 +13,8 @@ use std::sync::Arc;
 struct TargetViewUniformBuffer {
     target: UVec2,
     window: UVec2,
+    srgb: u32,
+    _padding: u32,
 }
 
 unsafe impl bytemuck::Zeroable for TargetViewUniformBuffer {}
@@ -22,6 +24,7 @@ pub struct TargetViewPipeline {
     pipeline: RenderPipeline,
     bind_group: wgpu::BindGroup,
     size_buffer: Buffer<TargetViewUniformBuffer>,
+    srgb: bool,
 }
 
 impl TargetViewPipeline {
@@ -30,6 +33,7 @@ impl TargetViewPipeline {
         render: Arc<RenderTarget>,
         surface_format: wgpu::TextureFormat,
         window_size: [u32; 2],
+        srgb: bool,
     ) -> Self {
         let bind_group_layout = BindGroupLayoutBuilder::new(gpu.clone())
             .add_texture_2d(0, wgpu::ShaderStages::FRAGMENT)
@@ -40,7 +44,7 @@ impl TargetViewPipeline {
             )
             .add_buffer(
                 2,
-                wgpu::ShaderStages::VERTEX,
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
             .build();
@@ -58,6 +62,8 @@ impl TargetViewPipeline {
         let buffer_data = TargetViewUniformBuffer {
             target: UVec2::from_array(render.size),
             window: UVec2::from_array(window_size),
+            srgb: if srgb { 1 } else { 0 },
+            _padding: 0,
         };
 
         let buffer = gpu.create_buffer_init(
@@ -126,6 +132,7 @@ impl TargetViewPipeline {
             pipeline,
             bind_group,
             size_buffer: buffer,
+            srgb,
         }
     }
 
@@ -138,6 +145,8 @@ impl TargetViewPipeline {
         let contents = TargetViewUniformBuffer {
             target: UVec2::from_array(target_size),
             window: UVec2::from_array(window_size),
+            srgb: if self.srgb { 1 } else { 0 },
+            _padding: 0,
         };
 
         self.size_buffer.write(ctx, &[contents]);
