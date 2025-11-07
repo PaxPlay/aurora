@@ -7,7 +7,7 @@ authors = ["Benedikt Krimmel"]
 homepage = "https://paxplay.github.io/aurora"
 
 [features]
-dynamic_shaders= []
+dynamic_shaders = []
 
 #[[example]]
 #name = "window"
@@ -15,14 +15,18 @@ dynamic_shaders= []
 
 [dependencies]
 cfg-if = "1"
-winit = "0.30.9"
-log  = "0.4.27"
-wgpu = "24.0.3"
+winit = "^0.30.12"
+log = "^0.4.27"
+wgpu = "^27.0.1"
 glam = { version = "0.30.2", features = ["glam-assert", "serde"] }
-egui = "0.31.1"
-egui-wgpu = "0.31.1"
+egui = "^0.33.0"
+egui-wgpu = "^0.33.0"
 pollster = "0.4.0"
-egui-winit = { version = "0.31.1", default-features = false, features = ["links", "wayland", "x11"] }
+egui-winit = { version = "^0.33.0", default-features = false, features = [
+    "links",
+    "wayland",
+    "x11",
+] }
 env_logger = "0.11.8"
 tobj = { version = "4.0.3", features = ["futures"] }
 bytemuck = "1.22.0"
@@ -41,12 +45,27 @@ exr = "1.73.0"
 wgsl_preprocessor = { path = "crates/wgsl_preprocessor" }
 wgsl_preprocessor_macro = { path = "crates/wgsl_preprocessor_macro" }
 chrono = "0.4.41"
-egui_plot = "0.32.1"
-egui_extras = "0.31.1"
+egui_plot = "^0.34.0"
+egui_extras = "^0.33.0"
 toml = "0.9.6"
 serde = "1.0.225"
 serde_arrays = "0.2.0"
 
 [dependencies.web-sys]
 version = "0.3.77"
-features = ["Window", "Request", "RequestInit", "RequestMode", "Response", "ReadableStream", "Location", "Blob", "Url", "HtmlAnchorElement", "Document", "Element", "Node", "console"]
+features = [
+    "Window",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "ReadableStream",
+    "Location",
+    "Blob",
+    "Url",
+    "HtmlAnchorElement",
+    "Document",
+    "Element",
+    "Node",
+    "console",
+]

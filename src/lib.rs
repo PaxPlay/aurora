@@ -298,7 +298,10 @@ impl Aurora {
 
         self.timestamp_queries
             .resolve_query_set(queries, gpu.clone());
-        gpu.device.poll(wgpu::Maintain::Wait);
+        gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 }
 
@@ -360,19 +363,18 @@ pub enum NewGpuContextError {
 
     #[cfg(target_arch = "wasm32")]
     #[error("failed creating adapter")]
-    RequestAdapterError,
+    RequestAdapterError(#[from] wgpu::RequestAdapterError),
 }
 
 impl GpuContext {
     #[cfg(not(target_arch = "wasm32"))]
     fn select_adapter(instance: &wgpu::Instance) -> Result<wgpu::Adapter, NewGpuContextError> {
-        const ADAPTER_PRIORITIES: [wgpu::Backend; 6] = [
+        const ADAPTER_PRIORITIES: [wgpu::Backend; 5] = [
             wgpu::Backend::Vulkan,
             wgpu::Backend::Metal,
             wgpu::Backend::Dx12,
             wgpu::Backend::BrowserWebGpu,
             wgpu::Backend::Gl,
-            wgpu::Backend::Empty,
         ];
 
         let mut adapters = instance.enumerate_adapters(wgpu::Backends::all());
@@ -407,8 +409,7 @@ impl GpuContext {
             if #[cfg(target_arch = "wasm32")] {
                 let adapter = instance
                     .request_adapter(&wgpu::RequestAdapterOptions::default())
-                    .await
-                    .ok_or(NewGpuContextError::RequestAdapterError)?;
+                    .await?;
             } else {
                 let adapter = Self::select_adapter(&instance)?;
             }
@@ -422,16 +423,13 @@ impl GpuContext {
         };
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: None,
-                    required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-                        | wgpu::Features::TIMESTAMP_QUERY,
-                    required_limits: limits,
-                    ..Default::default()
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                    | wgpu::Features::TIMESTAMP_QUERY,
+                required_limits: limits,
+                ..Default::default()
+            })
             .await?;
 
         let shaders = ShaderManager::new(device.clone());
@@ -682,7 +680,11 @@ struct UiContext {
 
 impl UiContext {
     pub fn new(gpu: &GpuContext, window: Arc<Window>, surface_format: wgpu::TextureFormat) -> Self {
-        let renderer = egui_wgpu::Renderer::new(&gpu.device, surface_format, None, 1, false);
+        let renderer = egui_wgpu::Renderer::new(
+            &gpu.device,
+            surface_format,
+            egui_wgpu::RendererOptions::default(),
+        );
 
         let context = egui::Context::default();
         let viewport_id = context.viewport_id();
@@ -719,6 +721,7 @@ impl UiContext {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: queries.render_pass_writes("rp_aurora_ui"),

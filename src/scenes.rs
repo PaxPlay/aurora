@@ -789,46 +789,47 @@ impl GpuSceneGeometry {
         ];
         let sizes = gpu.create_buffer_init("aurora_scene_sizes", &sizes, BU::STORAGE | BU::UNIFORM);
 
+        // cannot use wgpu::ShaderStages::all() because wgpu is broken https://github.com/gfx-rs/wgpu/issues/7708
         let bind_group_layout = BindGroupLayoutBuilder::new(gpu)
             .label("bgl_scene_geometry")
             .add_buffer(
                 0, // vertices
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 1, // indices
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Storage { read_only: true },
             )
             .add_buffer(
                 2, // model_start_indices
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Storage { read_only: true },
             )
             .add_buffer(
                 3, // material_indices
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Storage { read_only: true },
             )
             .add_buffer(
                 4, // ambient
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 5, // diffuse
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 6, // specular
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
             .add_buffer(
                 7, // sizes
-                wgpu::ShaderStages::all(),
+                wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
             .build();
@@ -1145,6 +1146,7 @@ impl Scene3dView for WireframeView {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: queries.render_pass_writes("rp_aurora_scene_3d"),
