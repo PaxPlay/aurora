@@ -14,9 +14,7 @@ var<workgroup> event_offsets: array<u32, 16>;
 fn schedule_invocations(
     @builtin(local_invocation_index) lidx: u32
 ) {
-    if lidx < 16u {
-        num_events[lidx] = atomicLoad(&schedule_intersect.num_events[lidx]);
-    }
+    num_events[lidx] = atomicLoad(&schedule_intersect.num_events[lidx]);
 
     if lidx == 0u {
         let old_isec_groups = schedule.ray_intersection_groups;
