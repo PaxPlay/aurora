@@ -149,7 +149,7 @@ fn handle_intersections(
                 nee_ray.direction = direction;
                 nee_ray.weight = weight;
                 nee_ray.primary_ray = isec.primary_ray;
-                nee_ray.t_max = distance - 0.01;
+                nee_ray.t_max = distance - EPSILON;
                 nee_ray.ray_type = 2u; // NEE ray
 
                 local_index = atomicAdd(&wg_num_nee_atomic, 1u);

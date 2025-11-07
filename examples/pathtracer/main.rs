@@ -1,7 +1,7 @@
 use aurora::{
     buffers::{Buffer, MirroredBuffer},
     compute_pipeline, dispatch_size, register_default,
-    scenes::{BasicScene3d, Scene3dView, SceneGeometry, SceneRenderError},
+    scenes::{BasicScene3d, Scene3dView, SceneRenderError},
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
     Aurora, CircularBuffer, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
@@ -27,8 +27,8 @@ fn main() {
 
 async fn main_async() {
     let mut aurora = Aurora::new().await.unwrap();
-    let scene_geometry = SceneGeometry::new("cornell_box.toml", aurora.get_gpu()).await;
-    let mut scene = BasicScene3d::new(scene_geometry, aurora.get_gpu(), aurora.get_target());
+    let mut scene =
+        BasicScene3d::new("cornell_box.toml", aurora.get_gpu(), aurora.get_target()).await;
     scene.add_view(
         "path_tracer",
         Box::new(PathTracerView::new(aurora.get_gpu(), &scene)),
@@ -962,19 +962,19 @@ impl Scene3dView for PathTracerView {
                         .expect("Could not cast schedule reorder data from u8 to u32");
                     for i in 0..(iterations + 1) as usize {
                         let num_events = &data_u32[64 * i..64 * i + 16];
-                        let event_type_start = &data_u32[64 * i + 32..64 * i + 48];
-                        let intersect_invocations = data_u32[64 * i + 48];
-                        log::info!(
-                           target: "aurora",
-                           "Iteration {i}: invocations: {:>8}, miss: {:>8}, nee_hit: {:>8}, nee_miss: {:>8}, primary_hit: {:>8}, shade: {:?}",
-                           intersect_invocations, num_events[7], num_events[1], num_events[2], num_events[0],
-                           &num_events[8..]
-                        );
-                        log::info!(
-                            target: "aurora",
-                            "event type start: {:?}",
-                            event_type_start
-                        );
+                        // let event_type_start = &data_u32[64 * i + 32..64 * i + 48];
+                        // let intersect_invocations = data_u32[64 * i + 48];
+                        // log::info!(
+                        //    target: "aurora",
+                        //    "Iteration {i}: invocations: {:>8}, miss: {:>8}, nee_hit: {:>8}, nee_miss: {:>8}, primary_hit: {:>8}, shade: {:?}",
+                        //    intersect_invocations, num_events[7], num_events[1], num_events[2], num_events[0],
+                        //    &num_events[8..]
+                        // );
+                        // log::info!(
+                        //     target: "aurora",
+                        //     "event type start: {:?}",
+                        //     event_type_start
+                        // );
                         stats.lock().unwrap().push(num_events);
                     }
                 }

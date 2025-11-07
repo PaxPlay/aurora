@@ -87,8 +87,14 @@ fn copy_target(
         if settings.accumulate != 0 {
             accumulated_color += primary_rays[index].accumulated_color;
             primary_rays[index].accumulated_color = accumulated_color;
-            accumulated_color /= accumulated_color.a;
+            accumulated_color /= max(accumulated_color.a, 1.0); // avoid division by zero
         }
+
+        // if settings.selected_buffer == 0u {
+        //     // for the main output buffer, convert back to sRGB
+        //     accumulated_color = vec4(xyzToSrgbVec3(accumulated_color.xyz), accumulated_color.a);
+        // }
+
         output_buffer_f32[4u * index     ] = accumulated_color.r;
         output_buffer_f32[4u * index + 1u] = accumulated_color.g;
         output_buffer_f32[4u * index + 2u] = accumulated_color.b;

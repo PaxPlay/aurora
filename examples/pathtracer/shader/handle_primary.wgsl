@@ -35,21 +35,25 @@ fn handle_primary(
     if gid.x < camera.resolution.x && gid.y < camera.resolution.y {
         // direct illuminaton
         let idx = camera.resolution.x * gid.y + gid.x;
-        let isec = ray_intersections[idx];
+        var isec = ray_intersections[idx];
 
         if isec.event_type == 0u {
             primary_rays[idx].result_color.a += 1.0; // count number of primary hits
+
+            // isec.weight *= dot(isec.n, isec.w_i);
 
             // NEE requires ambient light to be added here
             if settings.nee != 0u {
                 let mat_idx = material_indices[isec.surface_id];
                 let ambient_color = ambient[mat_idx];
                 if length(ambient_color) > 0.0 {
-                    primary_rays[idx].result_color += vec4(ambient_color, 0.0);
+                    let result_color = ambient_color * dot(isec.n, isec.w_i);
+                    primary_rays[idx].result_color += vec4(result_color, 0.0);
                 }
             }
 
             ray_intersections[idx].event_type = 8u; // set to normal intersection event; TODO bsdf id
+            // ray_intersections[idx].weight = isec.weight;
         }
     }
 }

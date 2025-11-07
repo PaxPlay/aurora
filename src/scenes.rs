@@ -575,16 +575,29 @@ impl Default for CameraDefinition {
     }
 }
 
+impl Into<Camera3d> for CameraDefinition {
+    fn into(self) -> Camera3d {
+        Camera3d::Perspective {
+            position: Vec3::from_array(self.position),
+            angle: Angle::from(Vec3::from_array(self.angle)),
+            fov: self.fov,
+            near: self.near,
+            far: self.far,
+            aspect_ratio: 16.0f32 / 9.0f32,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum ModelDefinition {
-    WavefrontObj { file: String },
+    WavefrontObj { file: String, scale: Option<f32> },
 }
 
 impl ModelDefinition {
     async fn load(&self, gpu: &GpuContext) -> (Vec<tobj::Model>, Vec<tobj::Material>) {
         match self {
-            Self::WavefrontObj { file } => {
+            Self::WavefrontObj { file, scale } => {
                 let mut obj_data = gpu
                     .filesystem
                     .create_reader(&format!("models/{file}"))
@@ -600,9 +613,18 @@ impl ModelDefinition {
                 )
                 .await;
 
-                let (models, materials) =
+                let (mut models, materials) =
                     load_result.expect(format!("Unable to load obj file for {}", file).as_str());
                 let materials = materials.expect("Failed to fetch material file");
+
+                if let Some(scale) = scale {
+                    for model in &mut models {
+                        for v in &mut model.mesh.positions {
+                            *v *= scale;
+                        }
+                    }
+                }
+
                 (models, materials)
             }
         }
@@ -620,17 +642,9 @@ pub struct SceneGeometry {
 }
 
 impl SceneGeometry {
-    pub async fn new(file: &str, gpu: Arc<GpuContext>) -> Self {
-        info!(target: "aurora", "Loading scene geometry from file \"{file}\"");
-
-        let scene_file = gpu
-            .filesystem
-            .create_reader(&format!("models/{file}"))
-            .await;
-        let scene_definition = toml::from_slice::<SceneDefinition>(&scene_file.into_inner())
-            .expect("Failed parsing scene definition");
-
-        let (models, materials) = scene_definition.models[0].load(&gpu).await;
+    async fn new(model_definitions: &[ModelDefinition], gpu: Arc<GpuContext>) -> Self {
+        assert!(!model_definitions.is_empty());
+        let (models, materials) = model_definitions[0].load(&gpu).await;
         info!(target: "aurora", "Models: {}, Materials: {}", models.len(), materials.len());
 
         let mut vertices = Vec::new();
@@ -911,20 +925,24 @@ pub struct BasicScene3d {
 }
 
 impl BasicScene3d {
-    pub fn new(
-        scene_geometry: SceneGeometry,
+    pub async fn new(
+        scene_definition_file: &str,
         gpu: Arc<GpuContext>,
         target: Arc<RenderTarget>,
     ) -> Self {
-        let camera = Camera3d::Perspective {
-            position: vec3(278f32, 273f32, -800f32),
-            angle: vec3(FRAC_PI_2, -FRAC_PI_2, 0f32).into(),
-            fov: 39.3f32,
-            near: 500f32,
-            far: 2000f32,
-            aspect_ratio: target.size[1] as f32 / target.size[0] as f32,
-        };
-        let camera = CameraWithBuffer::new(camera, gpu.clone());
+        info!(target: "aurora", "Loading scene geometry from file \"{scene_definition_file}\"");
+
+        let scene_file = gpu
+            .filesystem
+            .create_reader(&format!("models/{scene_definition_file}"))
+            .await;
+        let scene_definition = toml::from_slice::<SceneDefinition>(&scene_file.into_inner())
+            .expect("Failed parsing scene definition");
+
+        let scene_geometry = SceneGeometry::new(&scene_definition.models, gpu.clone()).await;
+
+        let mut camera = CameraWithBuffer::new(scene_definition.camera.into(), gpu.clone());
+        camera.update_resolution(target.size);
 
         let gpu_scene_geometry = GpuSceneGeometry::from(&scene_geometry, gpu.clone());
 

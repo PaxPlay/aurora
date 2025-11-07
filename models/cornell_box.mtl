@@ -1,16 +1,16 @@
 newmtl white
 Ka 0 0 0
-Kd 1 1 1
+Kd 0.885809 0.698859 0.666422
 Ks 0 0 0
 
 newmtl red
 Ka 0 0 0
-Kd 1 0 0
+Kd 0.570068 0.0430135 0.0443706
 Ks 0 0 0
 
 newmtl green
 Ka 0 0 0
-Kd 0 1 0
+Kd 0.105421 0.37798 0.0764250
 Ks 0 0 0
 
 newmtl blue
@@ -19,6 +19,6 @@ Kd 0 0 1
 Ks 0 0 0
 
 newmtl light
-Ka 20 20 20
-Kd 1 1 1
+Ka 18.387 13.9873 6.75357
+Kd 0.885809 0.698859 0.666422
 Ks 0 0 0

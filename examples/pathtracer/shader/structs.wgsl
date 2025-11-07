@@ -88,5 +88,37 @@ struct Settings {
 }
 
 const F32_MAX: f32 = 3.4028e38;
-const EPSILON: f32 = 1e-4;
+const EPSILON: f32 = 1e-7;
 const PI: f32 = 3.14159265359;
+
+fn xyzToSrgb(c: f32) -> f32 {
+    if c <= 0.0031308f {
+        return c * 12.92f;
+    } else {
+        return 1.055f * pow(c, 1.0f / 2.4f) - 0.055f;
+    }
+}
+
+fn xyzToSrgbVec3(c: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        xyzToSrgb(c.x),
+        xyzToSrgb(c.y),
+        xyzToSrgb(c.z)
+    );
+}
+
+// fn srgbToXyz(c: f32) -> f32 {
+//     if c <= 0.04045f {
+//         return c / 12.92f;
+//     } else {
+//         return pow((c + 0.055f) / 1.055f, 2.4f);
+//     }
+// }
+
+// fn srgbToXyzVec3(c: vec3<f32>) -> vec3<f32> {
+//     return vec3<f32>(
+//         srgbToXyz(c.x),
+//         srgbToXyz(c.y),
+//         srgbToXyz(c.z)
+//     );
+// }

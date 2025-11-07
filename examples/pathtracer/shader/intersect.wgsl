@@ -91,7 +91,7 @@ fn intersect_rays(
             }
 
             let t = inv_det * dot(e2, s_cross_e1);
-            if t > 0.01 && t < isec.t {
+            if t > 1e-4 && t < isec.t {
                 isec.t = t;
                 isec.pos = ray.origin + t * ray.direction;
                 isec.surface_id = i;
