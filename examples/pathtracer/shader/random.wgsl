@@ -1,3 +1,5 @@
+// Adapted from PCG, but with smaller state, since WGSL doesn't support 64-bit integers
+// Results seem okay
 struct PCG {
     state: u32,
     inc: u32,

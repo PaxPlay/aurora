@@ -77,6 +77,7 @@ struct PathTracerSettings {
     accumulate: u32,
     nee: u32,
     rr_alpha: f32,
+    jitter_primary: u32,
 }
 
 impl Default for PathTracerSettings {
@@ -87,6 +88,7 @@ impl Default for PathTracerSettings {
             accumulate: 1,
             nee: 1,
             rr_alpha: 0.8,
+            jitter_primary: 1,
         }
     }
 }
@@ -124,6 +126,7 @@ impl PathTracerSettings {
 
         changed |= Self::checkbox(ui, &mut self.accumulate, "Accumulate");
         changed |= Self::checkbox(ui, &mut self.nee, "Next Event Estimation");
+        changed |= Self::checkbox(ui, &mut self.jitter_primary, "Jitter Primary Rays");
         changed
     }
 }

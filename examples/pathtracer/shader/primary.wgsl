@@ -2,6 +2,7 @@
 #import "random.wgsl"
 
 @group(0) @binding(0) var<uniform> camera : CameraBuffer;
+@group(0) @binding(1) var<uniform> settings: Settings;
 
 @group(1) @binding(0) var<storage, read_write> primary_rays : array<PrimaryRayData>;
 @group(1) @binding(1) var<storage, read_write> rays : array<Ray>;
@@ -22,9 +23,17 @@ fn world_pos_from_camera_space(camera_space: vec3<f32>) -> vec3<f32> {
 fn generate_rays(
     @builtin(global_invocation_id) gid: vec3<u32>
 ) {
+    let idx = camera.resolution.x * gid.y + gid.x;
+
     var screen_pos = (vec2<f32>(gid.xy) + vec2<f32>(0.5, 0.5)) / vec2<f32>(camera.resolution);
     screen_pos = vec2(1.0) - screen_pos;
-    let world_pos = world_pos_from_camera_space(vec3(screen_pos * 2.0 - vec2(1.0), 0.0));
+    if settings.jitter_primary == 1u {
+        var pcg = pcg_seed(rng_seeds[0], idx);
+        let jitter = pcg_next_square(&pcg) - vec2<f32>(0.5);
+        screen_pos += jitter / vec2<f32>(camera.resolution);
+    }
+
+    var world_pos = world_pos_from_camera_space(vec3(screen_pos * 2.0 - vec2(1.0), 0.0));
     let direction = normalize(world_pos - camera.origin);
     var ray_data: PrimaryRayData;
     ray_data.origin = camera.origin;
@@ -32,8 +41,6 @@ fn generate_rays(
     ray_data.result_color = vec4(0.0);
 
     if gid.x < camera.resolution.x && gid.y < camera.resolution.y {
-        let idx = camera.resolution.x * gid.y + gid.x;
-
         primary_rays[idx].origin = ray_data.origin;
         primary_rays[idx].direction = ray_data.direction;
         primary_rays[idx].result_color = ray_data.result_color;
@@ -61,8 +68,8 @@ fn generate_rays(
         );
         schedule_intersect.intersect_invocations = num_rays;
 
-        schedule_shade.rng_seed_index = 0u;
-        schedule_intersect.rng_seed_index = 0u;
+        schedule_shade.rng_seed_index = 1u;
+        schedule_intersect.rng_seed_index = 1u;
     }
 
     if gid.x < 16u && gid.y == 0u {

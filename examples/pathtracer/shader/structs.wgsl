@@ -85,6 +85,7 @@ struct Settings {
     accumulate: u32,
     nee: u32,
     rr_alpha: f32,
+    jitter_primary: u32,
 }
 
 const F32_MAX: f32 = 3.4028e38;
