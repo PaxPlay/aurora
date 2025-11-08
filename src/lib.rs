@@ -4,6 +4,7 @@ mod internal;
 pub mod scenes;
 pub mod shader;
 
+use egui::Widget;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
@@ -19,6 +20,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::{collections::BTreeMap, default::Default};
 use thiserror::Error;
+use web_time::SystemTime;
 use wgpu::Extent3d;
 #[cfg(target_os = "linux")]
 use winit::platform::x11::EventLoopBuilderExtX11;
@@ -293,15 +295,18 @@ impl Aurora {
             &mut queries,
         ));
 
-        gpu.queue.submit(command_buffers);
+        // let before_submit = SystemTime::now();
+        let _index = gpu.queue.submit(command_buffers);
+        // gpu.queue.on_submitted_work_done(move || {
+        //     let after_submit = SystemTime::now();
+        //     if let Ok(duration) = after_submit.duration_since(before_submit) {
+        //         info!(target: "aurora", "Frame GPU time: {:?}", duration);
+        //     }
+        // });
         surface_texture.present();
 
         self.timestamp_queries
             .resolve_query_set(queries, gpu.clone());
-        gpu.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
     }
 }
 
@@ -583,7 +588,6 @@ impl AuroraWindow {
 
         let surface = gpu.instance.create_surface(window.clone())?;
         let capabilities = surface.get_capabilities(&gpu.adapter);
-        info!(target: "aurora", "Surface capabilities: {:?}", capabilities);
         let surface_format = capabilities
             .formats
             .iter()
@@ -601,7 +605,7 @@ impl AuroraWindow {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: capabilities.present_modes[0],
+            present_mode: wgpu::PresentMode::AutoNoVsync,
             alpha_mode: capabilities.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -681,6 +685,8 @@ struct UiContext {
     renderer: egui_wgpu::Renderer,
     state: egui_winit::State,
     show_performance_window: bool,
+    show_scene_window: bool,
+    show_info_window: bool,
     pause_rendering: bool,
     step: bool,
 }
@@ -702,6 +708,8 @@ impl UiContext {
             renderer,
             state,
             show_performance_window: false,
+            show_scene_window: true,
+            show_info_window: false,
             pause_rendering: false,
             step: false,
         }
@@ -738,47 +746,97 @@ impl UiContext {
             let input = self.state.take_egui_input(&self.window);
             let egui_ctx = self.state.egui_ctx();
             let ui_out = egui_ctx.run(input, |ctx| {
-                if let Some(scene) = scene.clone() {
-                    let mut scene = scene.try_borrow_mut().unwrap();
-                    egui::Window::new("Scene Configuration")
+                egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.toggle_value(&mut self.show_info_window, "Aurora");
+                        ui.separator();
+
+                        ui.scope(|ui| {
+                            ui.set_min_width(70.0);
+                            ui.label(if self.pause_rendering {
+                                "Paused"
+                            } else {
+                                "Rendering"
+                            });
+                        });
+                        ui.scope(|ui| {
+                            egui::Button::new(if self.pause_rendering { "▶" } else { "⏸" })
+                                .min_size(egui::vec2(25.0, 0.0))
+                                .ui(ui)
+                                .on_hover_ui(|ui| {
+                                    if self.pause_rendering {
+                                        ui.label("Resume Rendering");
+                                    } else {
+                                        ui.label("Pause Rendering");
+                                    }
+                                })
+                                .clicked()
+                                .then(|| {
+                                    self.pause_rendering = !self.pause_rendering;
+                                });
+
+                            if !self.pause_rendering {
+                                ui.disable();
+                            }
+                            self.step = ui.button("▶⏸").on_hover_text("Advance Frame").clicked();
+                        });
+                        ui.separator();
+
+                        ui.toggle_value(&mut self.show_scene_window, "Scene");
+                        ui.toggle_value(&mut self.show_performance_window, "Performance");
+                    });
+                });
+
+                if self.show_scene_window {
+                    if let Some(scene) = scene.clone() {
+                        let mut scene = scene.try_borrow_mut().unwrap();
+                        egui::Window::new("Scene Configuration")
+                            .default_open(true)
+                            .resizable(true)
+                            .show(ctx, |ui| {
+                                egui::ScrollArea::both().show(ui, |ui| {
+                                    scene.draw_ui(ui);
+                                });
+                            });
+                    }
+                }
+                if self.show_performance_window {
+                    egui::Window::new("Performance")
+                        .default_open(true)
+                        .resizable(true)
+                        .min_size([200.0, 150.0])
+                        .show(ctx, |ui| {
+                            Self::performance_window(gpu, ui);
+                        });
+                }
+                if self.show_info_window {
+                    egui::Window::new("About Aurora")
                         .default_open(true)
                         .resizable(true)
                         .show(ctx, |ui| {
-                            egui::ScrollArea::both().show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.button(if self.pause_rendering {
-                                        "Resume Rendering"
-                                    } else {
-                                        "Pause Rendering"
-                                    })
-                                    .clicked()
-                                    .then(|| {
-                                        self.pause_rendering = !self.pause_rendering;
-                                    });
+                            ui.label("Aurora is a framework for running GPU accelerated rendering and visualisation demos.");
 
-                                    if !self.pause_rendering {
-                                        ui.disable();
-                                    }
-                                    self.step = ui.button("Step Frame").clicked();
-                                });
+                            ui.add_space(0.8);
 
-                                ui.checkbox(
-                                    &mut self.show_performance_window,
-                                    "Show Performance Window",
-                                );
-                                scene.draw_ui(ui);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("View on");
+                                ui.hyperlink_to("GitHub", "https://github.com/paxplay/aurora");
                             });
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label("Created by");
+                                ui.hyperlink_to("Benedikt Krimmel", "https://benedikt.krimmel.eu");
+                            });
+
+                            ui.separator();
+
+                            ui.heading("Runtime Info");
+                            ui.label(format!(
+                                "Aurora Version: {}\nWGPU Backend: {:?}\nAdapter: {}",
+                                env!("CARGO_PKG_VERSION"),
+                                gpu.adapter.get_info().backend,
+                                gpu.adapter.get_info().name
+                            ));
                         });
-
-                    if self.show_performance_window {
-                        egui::Window::new("Performance")
-                            .default_open(true)
-                            .resizable(true)
-                            .min_size([200.0, 150.0])
-                            .show(ctx, |ui| {
-                                Self::performance_window(gpu, ui);
-                            });
-                    }
                 }
             });
 

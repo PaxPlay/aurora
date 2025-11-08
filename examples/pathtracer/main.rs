@@ -168,7 +168,7 @@ impl PathTracerStats {
         labels.try_into().unwrap()
     }
 
-    fn plot_events(&self, ui: &mut egui::Ui) -> egui::Response {
+    fn plot_events(&self, ui: &mut egui::Ui, count: Option<NonZero<u32>>) -> egui::Response {
         use egui_plot::{Bar, BarChart, Legend, Plot};
         const BAR_WIDTH: f64 = 1.0;
 
@@ -179,7 +179,15 @@ impl PathTracerStats {
             let series = &self.event_counts[i];
             let mut values = Vec::new();
             let mut max = 0u32;
-            for j in 0..series.len() {
+
+            let elements = match count {
+                Some(nz) => nz.get() as usize,
+                None => series.len(),
+            };
+
+            let start = 0isize.max(series.len() as isize - elements as isize - 1) as usize;
+
+            for j in start..series.len() {
                 if let Some(v) = series.get(j) {
                     max = max.max(*v);
                     values.push(Bar::new(j as f64 * BAR_WIDTH, *v as f64));
@@ -1089,17 +1097,29 @@ impl Scene3dView for PathTracerView {
     }
 
     fn draw_ui(&mut self, ui: &mut egui::Ui) {
-        self.should_clear |= ui.button("Clear Buffer").clicked();
-        if ui.button("Get Screenshot").clicked() {
-            self.screenshot();
-        }
+        ui.horizontal(|ui| {
+            self.should_clear |= ui.button("Clear Buffer").clicked();
+            if ui.button("Get Screenshot").clicked() {
+                self.screenshot();
+            }
+        });
 
-        if ui.button("buffer_check").clicked() {
-            self.buffer_check();
-        }
+        ui.separator();
 
         self.should_clear |= self.settings[0].ui(ui);
 
-        self.stats.lock().unwrap().plot_events(ui);
+        ui.group(|ui| {
+            ui.label("Iteration Event Counts");
+            self.stats
+                .lock()
+                .unwrap()
+                .plot_events(ui, NonZero::new(self.settings[0].max_iterations));
+        });
+
+        ui.collapsing("Debug", |ui| {
+            if ui.button("buffer_check").clicked() {
+                self.buffer_check();
+            }
+        });
     }
 }

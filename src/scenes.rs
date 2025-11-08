@@ -1013,6 +1013,8 @@ impl Scene for BasicScene3d {
                 }
             });
 
+        ui.separator();
+
         self.views
             .get(&self.current_view)
             .expect("Selected view does not exist.")
