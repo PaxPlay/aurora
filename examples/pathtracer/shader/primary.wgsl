@@ -26,7 +26,7 @@ fn generate_rays(
     let idx = camera.resolution.x * gid.y + gid.x;
 
     var screen_pos = (vec2<f32>(gid.xy) + vec2<f32>(0.5, 0.5)) / vec2<f32>(camera.resolution);
-    screen_pos = vec2(1.0) - screen_pos;
+    screen_pos.y = 1.0 - screen_pos.y;
     if settings.jitter_primary == 1u {
         var pcg = pcg_seed(rng_seeds[0], idx);
         let jitter = pcg_next_square(&pcg) - vec2<f32>(0.5);

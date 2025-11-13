@@ -170,8 +170,8 @@ impl Camera3d {
                 far,
                 aspect_ratio,
             } => {
-                Mat4::perspective_lh(fov.to_radians(), *aspect_ratio, *near, *far)
-                    * Mat4::look_at_lh(
+                Mat4::perspective_rh(fov.to_radians(), *aspect_ratio, *near, *far)
+                    * Mat4::look_at_rh(
                         position - angle.direction() * distance,
                         *position,
                         angle.up(),
@@ -185,8 +185,8 @@ impl Camera3d {
                 far,
                 aspect_ratio,
             } => {
-                Mat4::perspective_lh(fov.to_radians(), *aspect_ratio, *near, *far)
-                    * Mat4::look_at_lh(*position, position + angle.direction(), angle.up())
+                Mat4::perspective_rh(fov.to_radians(), *aspect_ratio, *near, *far)
+                    * Mat4::look_at_rh(*position, position + angle.direction(), angle.up())
             }
             Camera3d::Orthographic {
                 position,
@@ -198,8 +198,8 @@ impl Camera3d {
             } => {
                 let right = zoom * aspect_ratio;
 
-                Mat4::orthographic_lh(-right, right, -zoom, *zoom, *near, *far)
-                    * Mat4::look_at_lh(*position, position + angle.direction(), angle.up())
+                Mat4::orthographic_rh(-right, right, -zoom, *zoom, *near, *far)
+                    * Mat4::look_at_rh(*position, position + angle.direction(), angle.up())
             }
         }
     }
