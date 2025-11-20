@@ -1,4 +1,3 @@
-use crate::shader::BindGroupLayout;
 use crate::{
     buffers::Buffer,
     compute_pipeline,
@@ -23,7 +22,7 @@ pub struct ComputeTestEnvironment<A: bytemuck::Pod, B: bytemuck::Pod> {
     upload_staging_buffer: Buffer<u8>,
     download_staging_buffer: Buffer<u8>,
     bind_group: wgpu::BindGroup,
-    bind_group_layout: BindGroupLayout,
+    bind_group_layout: wgpu::BindGroupLayout,
     pipeline: Option<ComputePipeline>,
 }
 
@@ -89,7 +88,7 @@ impl<A: bytemuck::Pod, B: bytemuck::Pod> ComputeTestEnvironment<A, B> {
             upload_staging_buffer,
             download_staging_buffer,
             bind_group,
-            bind_group_layout,
+            bind_group_layout: bind_group_layout.get(),
             pipeline: None,
         }
     }
@@ -110,14 +109,23 @@ impl<A: bytemuck::Pod, B: bytemuck::Pod> ComputeTestEnvironment<A, B> {
         ]
     }
 
-    pub fn set_shader_inline_single(&mut self, includes: &[&str], code: &str) {
+    pub fn set_shader_inline_single(
+        &mut self,
+        includes: &[&str],
+        code: &str,
+        prelude: Option<&str>,
+    ) {
         let combined_includes: String = includes
             .iter()
             .map(|include| format!("#include \"{}\"\n", include))
             .collect();
 
+        let prelude_code = prelude.unwrap_or("");
+
         let final_code = format!(
             "{combined_includes}
+
+            {prelude_code}
 
             @group(0) @binding(0) var<storage, read_write> buffer_a: array<u32>;
             @group(0) @binding(1) var<storage, read_write> buffer_b: array<u32>;
@@ -149,7 +157,7 @@ impl<A: bytemuck::Pod, B: bytemuck::Pod> ComputeTestEnvironment<A, B> {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("aurora_test_main_pipeline_layout"),
-                    bind_group_layouts: &[&self.bind_group_layout.get()],
+                    bind_group_layouts: &[&self.bind_group_layout],
                     push_constant_ranges: &[],
                 });
 
@@ -174,6 +182,7 @@ impl<A: bytemuck::Pod, B: bytemuck::Pod> ComputeTestEnvironment<A, B> {
             .expect("Failed polling device");
     }
 
+    /// Run the configured pipeline. Copies the host buffers to and from the gpu before and after the dispatch respectively.
     pub fn execute(&mut self) {
         let mut encoder = self
             .gpu
@@ -289,6 +298,7 @@ mod tests {
                 buffer_b[i] = buffer_a[i] * 2u;
             }
             ",
+            None,
         );
 
         env.data_a = vec![1, 2, 3, 4];
