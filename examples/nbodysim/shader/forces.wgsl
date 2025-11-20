@@ -1,7 +1,7 @@
 #import "common.wgsl"
 
 @group(0) @binding(0) var<storage, read> positions: array<vec3<f32>>;
-@group(0) @binding(1) var<storage, read_write> forces: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> forces: array<vec3<f32>>;
 
 @group(1) @binding(0) var<uniform> settings: Settings;
 
@@ -23,7 +23,6 @@ fn cs_main(
     @builtin(local_invocation_id) local_id: vec3<u32>) {
     var accumulated_force = vec3<f32>(0.0, 0.0, 0.0);
     var position = vec3<f32>(0.0, 0.0, 0.0);
-    var accumulated_indices = 0u;
 
     if (global_id.x < settings.num_particles) {
         position = positions[global_id.x];
@@ -39,7 +38,6 @@ fn cs_main(
         let other_position = wg_positions[i];
         if i < num_valid {
             accumulated_force += calculate_force(position, other_position);
-            accumulated_indices += workgroup_id.x * WORKGROUP_SIZE + i;
         }
     }
 
@@ -58,12 +56,11 @@ fn cs_main(
             let other_position = wg_positions[other_index];
             if other_index < num_valid {
                 accumulated_force += calculate_force(position, other_position);
-                accumulated_indices += wg * WORKGROUP_SIZE + other_index;
             }
         }
     }
 
     if (global_id.x < settings.num_particles) {
-        forces[global_id.x] = vec4(accumulated_force, f32(accumulated_indices));
+        forces[global_id.x] = accumulated_force;
     }
 }
