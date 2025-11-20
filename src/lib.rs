@@ -4,6 +4,9 @@ mod internal;
 pub mod scenes;
 pub mod shader;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
+
 use egui::Widget;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

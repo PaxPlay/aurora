@@ -8,10 +8,7 @@ homepage = "https://paxplay.github.io/aurora"
 
 [features]
 dynamic_shaders = []
-
-#[[example]]
-#name = "window"
-#required-features = ["dynamic_shaders"]
+test-utils = []
 
 [dependencies]
 cfg-if = "1"
