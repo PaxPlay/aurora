@@ -3,31 +3,12 @@ use aurora::{
     compute_pipeline, dispatch_size, register_default, render_pipeline,
     scenes::{Scene, SceneRenderError},
     shader::{BindGroupLayoutBuilder, ComputePipeline, RenderPipeline},
-    Aurora, CommandEncoderTimestampExt, GpuContext, RenderTarget, TimestampQueries,
+    CommandEncoderTimestampExt, GpuContext, RenderTarget, TimestampQueries,
 };
 use rand::{rngs::SmallRng, Rng, SeedableRng};
 use std::f32;
 use std::sync::Arc;
 use wgpu::CommandBuffer;
-
-fn main() {
-    cfg_if::cfg_if! {
-        if #[cfg(target_arch = "wasm32")] {
-            console_log::init_with_level(log::Level::Debug).unwrap();
-            wasm_bindgen_futures::spawn_local(run());
-        } else {
-            env_logger::init();
-            pollster::block_on(run());
-        }
-    }
-}
-
-async fn run() {
-    let mut aurora = Aurora::new().await.unwrap();
-    let scene = NBodySim::new(aurora.get_gpu(), aurora.get_target()).await;
-    aurora.add_scene("nbodysim", Box::new(scene));
-    aurora.run().unwrap();
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -40,7 +21,7 @@ struct NBodySimSettings {
 
 impl NBodySimSettings {
     fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.num_bodies, 1..=200_000).text("Number of Bodies"));
+        ui.add(egui::Slider::new(&mut self.num_bodies, 1..=2_000_000).text("Number of Bodies"));
         ui.add(egui::Slider::new(&mut self.time_step, 0.001..=1.0).text("Time Step"));
     }
 }
@@ -56,11 +37,11 @@ impl Default for NBodySimSettings {
     }
 }
 
-struct NBodySim {
+pub struct NBodySim {
     settings: MirroredBuffer<NBodySimSettings>,
-    particle_positions: Buffer<f32>,
-    particle_velocities: Buffer<f32>,
-    particle_forces: Buffer<f32>,
+    // particle_positions: Buffer<f32>,
+    // particle_velocities: Buffer<f32>,
+    // particle_forces: Buffer<f32>,
     bind_group_ro: wgpu::BindGroup,
     bind_group_forces: wgpu::BindGroup,
     bind_group_update: wgpu::BindGroup,
@@ -98,8 +79,8 @@ impl NBodySim {
         for _ in 0..settings.data[0].num_bodies as usize {
             let a = rng.random::<f32>() * f32::consts::PI * 2.0f32;
 
-            velocity_vector.push(a.cos() * 0.05);
-            velocity_vector.push(a.sin() * 0.05);
+            velocity_vector.push(a.cos() * 0.001);
+            velocity_vector.push(a.sin() * 0.001);
             velocity_vector.push(0.0);
             velocity_vector.push(0.0);
         }
@@ -295,9 +276,9 @@ impl NBodySim {
 
         Self {
             settings,
-            particle_positions,
-            particle_velocities,
-            particle_forces,
+            // particle_positions,
+            // particle_velocities,
+            // particle_forces,
             bind_group_ro,
             bind_group_forces,
             bind_group_update,

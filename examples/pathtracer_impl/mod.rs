@@ -3,7 +3,7 @@ use aurora::{
     compute_pipeline, dispatch_size, register_default,
     scenes::{BasicScene3d, Scene3dView, SceneRenderError},
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline},
-    Aurora, CircularBuffer, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
+    CircularBuffer, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
 use log::{info, warn};
 use rand::Rng;
@@ -12,30 +12,6 @@ use std::{
     ops::DerefMut,
     sync::{Arc, Mutex},
 };
-
-fn main() {
-    cfg_if::cfg_if! {
-        if #[cfg(target_arch = "wasm32")] {
-            console_log::init_with_level(log::Level::Debug).unwrap();
-            wasm_bindgen_futures::spawn_local(main_async());
-        } else {
-            env_logger::init();
-            pollster::block_on(main_async());
-        }
-    }
-}
-
-async fn main_async() {
-    let mut aurora = Aurora::new().await.unwrap();
-    let mut scene =
-        BasicScene3d::new("cornell_box.toml", aurora.get_gpu(), aurora.get_target()).await;
-    scene.add_view(
-        "path_tracer",
-        Box::new(PathTracerView::new(aurora.get_gpu(), &scene)),
-    );
-    aurora.add_scene("basic_3d", Box::new(scene));
-    aurora.run().unwrap();
-}
 
 struct ImageStorageBuffer {
     resolution: [u32; 2],
@@ -217,7 +193,7 @@ impl PathTracerStats {
     }
 }
 
-struct PathTracerView {
+pub struct PathTracerView {
     gpu: Arc<GpuContext>,
     schedule_pipeline: ComputePipeline,
     ray_generation_pipeline: ComputePipeline,
@@ -252,7 +228,7 @@ struct PathTracerView {
 }
 
 impl PathTracerView {
-    fn new(gpu: Arc<GpuContext>, scene: &BasicScene3d) -> Self {
+    pub fn new(gpu: Arc<GpuContext>, scene: &BasicScene3d) -> Self {
         // this fucntion is way too long, but I don't have a reasonable way to make it shorter?
         let total_pixels: usize =
             scene.camera.resolution[0] as usize * scene.camera.resolution[1] as usize;

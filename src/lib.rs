@@ -7,6 +7,9 @@ pub mod shader;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testing;
 
+#[cfg(target_arch = "wasm32")]
+mod web_bindings;
+
 use egui::Widget;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -23,7 +26,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::{collections::BTreeMap, default::Default};
 use thiserror::Error;
-use web_time::SystemTime;
+// use web_time::SystemTime;
 use wgpu::Extent3d;
 #[cfg(target_os = "linux")]
 use winit::platform::x11::EventLoopBuilderExtX11;
@@ -32,6 +35,7 @@ use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 use log::{error, info, warn};
 
 use clap::Parser;
+use winit::event_loop::EventLoop;
 
 /// Aurora CLI
 #[derive(Debug, Parser)]
@@ -49,6 +53,14 @@ struct Args {
 
     #[arg(long)]
     headless: Option<String>,
+
+    #[arg(short, long)]
+    scene: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum AuroraEvent {
+    ChangeScene(String),
 }
 
 /// Central Aurora context
@@ -202,14 +214,26 @@ impl Aurora {
 
         info!(target: "aurora", "Running Aurora in windowed mode!");
 
-        let mut event_loop_builder = winit::event_loop::EventLoop::builder();
+        if let Some(scene_name) = self.args.scene.as_ref() {
+            let scene_name = scene_name.clone(); // need to clone for borrow checker
+            self.set_current_scene(&scene_name);
+        }
+
+        let mut event_loop_builder = EventLoop::with_user_event();
         #[cfg(target_os = "linux")]
         {
             if self.args.force_x11 {
                 event_loop_builder.with_x11();
             }
         }
-        let event_loop = event_loop_builder.build()?;
+        let event_loop: EventLoop<AuroraEvent> = event_loop_builder.build()?;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let event_loop_proxy = event_loop.create_proxy();
+            let scenes: Vec<String> = self.scenes.keys().map(|s| s.clone()).collect();
+            web_bindings::init_binding_state(scenes, event_loop_proxy);
+        }
 
         event_loop.run_app(self)?;
         Ok(())
@@ -256,9 +280,9 @@ impl Aurora {
             Some(name) => Some(name.clone()),
             None => {
                 if let Some(entry) = self.scenes.first_entry() {
-                    let name = Some(entry.key().clone());
-                    self.current_scene = name.clone();
-                    name
+                    let name = entry.key().clone();
+                    self.set_current_scene(&name);
+                    Some(name)
                 } else {
                     None
                 }
@@ -266,6 +290,17 @@ impl Aurora {
         };
 
         scene_name.map(|name| (self.scenes.get(&name).unwrap()).clone())
+    }
+
+    pub fn set_current_scene(&mut self, name: &str) {
+        if self.scenes.contains_key(name) {
+            self.current_scene = Some(String::from(name));
+            info!(target: "aurora", "Switched to scene \"{name}\"");
+            #[cfg(target_arch = "wasm32")]
+            web_bindings::set_binding_state_scene(name);
+        } else {
+            error!(target: "aurora", "Scene \"{name}\" not found!");
+        }
     }
 
     fn render(&mut self) {
@@ -313,14 +348,22 @@ impl Aurora {
     }
 }
 
-impl winit::application::ApplicationHandler for Aurora {
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+impl winit::application::ApplicationHandler<AuroraEvent> for Aurora {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.window = AuroraWindow::new(self.gpu.clone(), self.target.clone(), event_loop).ok();
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AuroraEvent) {
+        match event {
+            AuroraEvent::ChangeScene(name) => {
+                self.set_current_scene(&name);
+            }
+        }
     }
 
     fn window_event(
         &mut self,
-        event_loop: &winit::event_loop::ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
