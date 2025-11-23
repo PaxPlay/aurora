@@ -66,4 +66,5 @@ features = [
     "Element",
     "Node",
     "console",
+    "CustomEvent"
 ]

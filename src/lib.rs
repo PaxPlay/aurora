@@ -351,6 +351,8 @@ impl Aurora {
 impl winit::application::ApplicationHandler<AuroraEvent> for Aurora {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         self.window = AuroraWindow::new(self.gpu.clone(), self.target.clone(), event_loop).ok();
+        #[cfg(target_arch = "wasm32")]
+        web_bindings::send_js_window_event("AuroraInitialized");
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AuroraEvent) {

@@ -13,6 +13,14 @@ struct BindingState {
 
 static BINDING_STATE: OnceLock<RwLock<BindingState>> = OnceLock::new();
 
+pub fn send_js_window_event(name: &str) {
+    let window = web_sys::window().expect("no global `window` exists");
+    let event = web_sys::CustomEvent::new(name).unwrap();
+    window
+        .dispatch_event(&event)
+        .expect("Failed to dispatch event");
+}
+
 pub fn init_binding_state(scenes: Vec<String>, event_loop: EventLoopProxy<AuroraEvent>) {
     BINDING_STATE
         .set(RwLock::new(BindingState {
