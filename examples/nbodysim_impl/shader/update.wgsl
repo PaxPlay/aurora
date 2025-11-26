@@ -13,7 +13,11 @@ fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         var velocity = velocities[index];
         var position = positions[index];
-        let force = forces[index].xyz;
+        var force = forces[index].xyz;
+
+        if max(length(abs(force)), 0.0) == 0.0 {
+            force = vec3<f32>(0.0, 0.0, 0.0);
+        }
 
         // Update velocity
         velocity += force * time_step;

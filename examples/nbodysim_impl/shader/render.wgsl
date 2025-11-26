@@ -39,5 +39,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (alpha < 0.01) {
         discard;
     }
+
+    if max(in.force, 0.0) == 0.0 {
+        return vec4<f32>(vec3(1.0, 0.0, 0.0) * alpha, alpha);
+    }
+
     return vec4<f32>(vec3(1.0, 1.0, in.force / 10.0) * alpha, alpha);
 }

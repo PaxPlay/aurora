@@ -9,8 +9,9 @@ const WORKGROUP_SIZE: u32 = 128u;
 var<workgroup> wg_positions: array<vec3<f32>, WORKGROUP_SIZE>;
 
 fn calculate_force(pos_a: vec3<f32>, pos_b: vec3<f32>) -> vec3<f32> {
-    let direction = pos_b - pos_a;
+    var direction = pos_b - pos_a;
     let distance_sq = max(dot(direction, direction), 0.0001);
+
     let force_magnitude = settings.gravitational_constant / distance_sq;
     return normalize(direction) * force_magnitude;
 }
@@ -23,6 +24,7 @@ fn cs_main(
     @builtin(local_invocation_id) local_id: vec3<u32>) {
     var accumulated_force = vec3<f32>(0.0, 0.0, 0.0);
     var position = vec3<f32>(0.0, 0.0, 0.0);
+//    var accumulated_index = 0u;
 
     if (global_id.x < settings.num_particles) {
         position = positions[global_id.x];
@@ -38,6 +40,7 @@ fn cs_main(
         let other_position = wg_positions[i];
         if i < num_valid {
             accumulated_force += calculate_force(position, other_position);
+//            accumulated_index += workgroup_id.x * WORKGROUP_SIZE + i;
         }
     }
 
@@ -52,10 +55,11 @@ fn cs_main(
 
         let num_valid = min(settings.num_particles - wg * WORKGROUP_SIZE, WORKGROUP_SIZE);
         for (var i: u32 = 0; i < WORKGROUP_SIZE; i = i + 1u) {
-            let other_index = (workgroup_id.x + i) % WORKGROUP_SIZE;
+            let other_index = (local_id.x + i) % WORKGROUP_SIZE;
             let other_position = wg_positions[other_index];
             if other_index < num_valid {
                 accumulated_force += calculate_force(position, other_position);
+//                accumulated_index += wg * WORKGROUP_SIZE + other_index;
             }
         }
     }

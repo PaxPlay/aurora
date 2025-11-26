@@ -1,8 +1,9 @@
+use aurora::buffers::BufferCopyUtil;
 use aurora::{
     buffers::{Buffer, MirroredBuffer},
     compute_pipeline, dispatch_size, register_default, render_pipeline,
     scenes::{Scene, SceneRenderError},
-    shader::{BindGroupLayoutBuilder, ComputePipeline, RenderPipeline},
+    shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline, RenderPipeline},
     CommandEncoderTimestampExt, GpuContext, RenderTarget, TimestampQueries,
 };
 use rand::{rngs::SmallRng, Rng, SeedableRng};
@@ -21,27 +22,43 @@ struct NBodySimSettings {
 
 impl NBodySimSettings {
     fn ui(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.num_bodies, 1..=2_000_000).text("Number of Bodies"));
-        ui.add(egui::Slider::new(&mut self.time_step, 0.001..=1.0).text("Time Step"));
+        ui.add(egui::Slider::new(&mut self.num_bodies, 2..=300_000).text("Number of Bodies"));
+        ui.add(
+            egui::Slider::new(&mut self.time_step, 0.000001..=0.01)
+                .text("Time Step")
+                .logarithmic(true),
+        );
+        ui.add(
+            egui::Slider::new(&mut self.gravity, 0.000001..=0.01)
+                .text("Gravity")
+                .logarithmic(true),
+        );
     }
 }
 
 impl Default for NBodySimSettings {
     fn default() -> Self {
         Self {
-            num_bodies: 1024 * 256,
-            time_step: 0.005,
+            num_bodies: 1024 * 64,
+            time_step: 0.001,
             seed: 42,
-            gravity: 1e-8,
+            gravity: 1e-6,
         }
     }
 }
 
 pub struct NBodySim {
-    settings: MirroredBuffer<NBodySimSettings>,
+    settings: NBodySimSettings,
+    settings_current: MirroredBuffer<NBodySimSettings>,
+    sync_settings: bool,
+    copy_util: BufferCopyUtil,
+
     // particle_positions: Buffer<f32>,
     // particle_velocities: Buffer<f32>,
     // particle_forces: Buffer<f32>,
+    layout_ro: BindGroupLayout,
+    layout_forces: BindGroupLayout,
+    layout_update: BindGroupLayout,
     bind_group_ro: wgpu::BindGroup,
     bind_group_forces: wgpu::BindGroup,
     bind_group_update: wgpu::BindGroup,
@@ -53,46 +70,18 @@ pub struct NBodySim {
 
 impl NBodySim {
     pub async fn new(gpu: Arc<GpuContext>, target: Arc<RenderTarget>) -> Self {
-        let settings = MirroredBuffer::from_data(
+        let settings = NBodySimSettings::default();
+        let settings_buffer = MirroredBuffer::from_data(
             &gpu,
             "NBodySim Settings",
-            Box::new([NBodySimSettings::default()]),
+            Box::new([settings.clone()]),
             wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         );
 
         let (particle_positions, particle_velocities, particle_forces) =
-            Self::allocate_particles(&gpu, settings.data[0].num_bodies as usize);
+            Self::allocate_particles(&gpu, settings.num_bodies as usize, settings.seed as u64);
 
-        let mut rng = SmallRng::seed_from_u64(settings.data[0].seed as u64);
-        let position_vector: Vec<f32> = (&mut rng)
-            .random_iter()
-            .take(settings.data[0].num_bodies as usize * 4)
-            .collect();
-        gpu.queue.write_buffer(
-            &particle_positions,
-            0,
-            bytemuck::cast_slice(&position_vector),
-        );
-
-        let mut velocity_vector: Vec<f32> =
-            Vec::with_capacity(4 * settings.data[0].num_bodies as usize);
-        for _ in 0..settings.data[0].num_bodies as usize {
-            let a = rng.random::<f32>() * f32::consts::PI * 2.0f32;
-
-            velocity_vector.push(a.cos() * 0.001);
-            velocity_vector.push(a.sin() * 0.001);
-            velocity_vector.push(0.0);
-            velocity_vector.push(0.0);
-        }
-        gpu.queue.write_buffer(
-            &particle_velocities,
-            0,
-            bytemuck::cast_slice(&velocity_vector),
-        );
-
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("Polling failed when initializing NBodySim buffers");
+        let copy_util = BufferCopyUtil::new(2048);
 
         let bind_group_layout_settings = BindGroupLayoutBuilder::new(gpu.clone())
             .label("nbodysim_settings_bgl")
@@ -107,7 +96,7 @@ impl NBodySim {
         let bind_group_settings = bind_group_layout_settings
             .bind_group_builder()
             .label("nbodysim_settings_bg")
-            .buffer(0, &settings.buffer)
+            .buffer(0, &settings_buffer.buffer)
             .build()
             .expect("Failed creating bind group for NBodySim settings");
 
@@ -135,14 +124,6 @@ impl NBodySim {
                 wgpu::BufferBindingType::Storage { read_only: true },
             )
             .build();
-        let bind_group_ro = bind_group_layout_ro
-            .bind_group_builder()
-            .label("nbodysim_bg")
-            .buffer(0, &particle_positions)
-            .buffer(1, &particle_velocities)
-            .buffer(2, &particle_forces)
-            .build()
-            .expect("Failed creating bind group for NBodySim");
 
         let bind_group_layout_forces = BindGroupLayoutBuilder::new(gpu.clone())
             .label("nbodysim_forces_bgl")
@@ -157,13 +138,6 @@ impl NBodySim {
                 wgpu::BufferBindingType::Storage { read_only: false },
             )
             .build();
-        let bind_group_forces = bind_group_layout_forces
-            .bind_group_builder()
-            .label("nbodysim_forces_bg")
-            .buffer(0, &particle_positions)
-            .buffer(1, &particle_forces)
-            .build()
-            .expect("Failed creating bind group for NBodySim forces");
 
         let bind_group_layout_update = BindGroupLayoutBuilder::new(gpu.clone())
             .label("nbodysim_update_bgl")
@@ -183,14 +157,15 @@ impl NBodySim {
                 wgpu::BufferBindingType::Storage { read_only: true },
             )
             .build();
-        let bind_group_update = bind_group_layout_update
-            .bind_group_builder()
-            .label("nbodysim_update_bg")
-            .buffer(0, &particle_positions)
-            .buffer(1, &particle_velocities)
-            .buffer(2, &particle_forces)
-            .build()
-            .expect("Failed creating bind group for NBodySim update");
+
+        let (bind_group_ro, bind_group_update, bind_group_forces) = Self::create_bind_groups(
+            particle_positions,
+            particle_velocities,
+            particle_forces,
+            &bind_group_layout_ro,
+            &bind_group_layout_forces,
+            &bind_group_layout_update,
+        );
 
         register_default!(gpu.shaders, "nbodysim_forces", "forces.wgsl");
         let pipeline_layout_forces =
@@ -276,9 +251,15 @@ impl NBodySim {
 
         Self {
             settings,
+            settings_current: settings_buffer,
+            sync_settings: false,
+            copy_util,
             // particle_positions,
             // particle_velocities,
             // particle_forces,
+            layout_ro: bind_group_layout_ro,
+            layout_forces: bind_group_layout_forces,
+            layout_update: bind_group_layout_update,
             bind_group_ro,
             bind_group_forces,
             bind_group_update,
@@ -290,8 +271,9 @@ impl NBodySim {
     }
 
     fn allocate_particles(
-        gpu: &Arc<GpuContext>,
+        gpu: &GpuContext,
         num_bodies: usize,
+        seed: u64,
     ) -> (Buffer<f32>, Buffer<f32>, Buffer<f32>) {
         let particle_positions = gpu.create_buffer(
             "Particle Positions",
@@ -315,7 +297,98 @@ impl NBodySim {
                 | wgpu::BufferUsages::COPY_SRC,
         );
 
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut position_vector: Vec<f32> = Vec::with_capacity(4 * num_bodies as usize);
+        for _ in 0..num_bodies as usize {
+            position_vector.push(rng.random::<f32>());
+            position_vector.push(rng.random::<f32>());
+            position_vector.push(0.0);
+            position_vector.push(0.0);
+        }
+
+        gpu.queue.write_buffer(
+            &particle_positions,
+            0,
+            bytemuck::cast_slice(&position_vector),
+        );
+
+        let mut velocity_vector: Vec<f32> = Vec::with_capacity(4 * num_bodies as usize);
+        for _ in 0..num_bodies as usize {
+            let a = rng.random::<f32>() * f32::consts::PI * 2.0f32;
+
+            velocity_vector.push(a.cos() * 0.001);
+            velocity_vector.push(a.sin() * 0.001);
+            velocity_vector.push(0.0);
+            velocity_vector.push(0.0);
+        }
+        gpu.queue.write_buffer(
+            &particle_velocities,
+            0,
+            bytemuck::cast_slice(&velocity_vector),
+        );
+
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("Polling failed when initializing NBodySim buffers");
+
         (particle_positions, particle_velocities, particle_forces)
+    }
+
+    fn create_bind_groups(
+        positions: Buffer<f32>,
+        velocities: Buffer<f32>,
+        forces: Buffer<f32>,
+        layout_ro: &BindGroupLayout,
+        layout_forces: &BindGroupLayout,
+        layout_update: &BindGroupLayout,
+    ) -> (wgpu::BindGroup, wgpu::BindGroup, wgpu::BindGroup) {
+        let bind_group_ro = layout_ro
+            .bind_group_builder()
+            .label("nbodysim_bg")
+            .buffer(0, &positions)
+            .buffer(1, &velocities)
+            .buffer(2, &forces)
+            .build()
+            .expect("Failed creating bind group for NBodySim");
+
+        let bind_group_update = layout_update
+            .bind_group_builder()
+            .label("nbodysim_update_bg")
+            .buffer(0, &positions)
+            .buffer(1, &velocities)
+            .buffer(2, &forces)
+            .build()
+            .expect("Failed creating bind group for NBodySim update");
+
+        let bind_group_forces = layout_forces
+            .bind_group_builder()
+            .label("nbodysim_forces_bg")
+            .buffer(0, &positions)
+            .buffer(1, &forces)
+            .build()
+            .expect("Failed creating bind group for NBodySim forces");
+
+        (bind_group_ro, bind_group_update, bind_group_forces)
+    }
+    fn reallocate_particles(&mut self, gpu: &GpuContext) {
+        let (particle_positions, particle_velocities, particle_forces) = Self::allocate_particles(
+            gpu,
+            self.settings_current.data[0].num_bodies as usize,
+            self.settings_current.data[0].seed as u64,
+        );
+
+        let (bind_group_ro, bind_group_update, bind_group_forces) = Self::create_bind_groups(
+            particle_positions,
+            particle_velocities,
+            particle_forces,
+            &self.layout_ro,
+            &self.layout_forces,
+            &self.layout_update,
+        );
+
+        self.bind_group_ro = bind_group_ro;
+        self.bind_group_update = bind_group_update;
+        self.bind_group_forces = bind_group_forces;
     }
 }
 
@@ -326,6 +399,18 @@ impl Scene for NBodySim {
         target: Arc<RenderTarget>,
         queries: &mut TimestampQueries,
     ) -> Result<Vec<CommandBuffer>, SceneRenderError> {
+        let mut cbs = Vec::with_capacity(2);
+        if self.sync_settings {
+            self.settings_current[0] = self.settings.clone();
+            cbs.push(self.copy_util.create_copy_command(&gpu, |ctx| {
+                self.settings_current.write(ctx);
+            }));
+
+            self.reallocate_particles(&gpu);
+
+            self.sync_settings = false;
+        }
+
         let mut ce = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -337,13 +422,13 @@ impl Scene for NBodySim {
             cp.set_bind_group(0, &self.bind_group_forces, &[]);
             cp.set_bind_group(1, &self.bind_group_settings, &[]);
             cp.set_pipeline(&self.pipeline_calculate_forces.get()?);
-            let (x, y, z) = dispatch_size((self.settings[0].num_bodies, 1, 1), (256, 1, 1));
+            let (x, y, z) = dispatch_size((self.settings_current[0].num_bodies, 1, 1), (128, 1, 1));
             cp.dispatch_workgroups(x, y, z);
 
             cp.set_bind_group(0, &self.bind_group_update, &[]);
             cp.set_bind_group(1, &self.bind_group_settings, &[]);
             cp.set_pipeline(&self.pipeline_update.get()?);
-            let (x, y, z) = dispatch_size((self.settings[0].num_bodies, 1, 1), (64, 1, 1));
+            let (x, y, z) = dispatch_size((self.settings_current[0].num_bodies, 1, 1), (64, 1, 1));
             cp.dispatch_workgroups(x, y, z);
         }
         {
@@ -365,13 +450,23 @@ impl Scene for NBodySim {
 
             rp.set_bind_group(0, &self.bind_group_ro, &[]);
             rp.set_pipeline(&self.pipeline_render.get()?);
-            rp.draw(0..(self.settings[0].num_bodies * 6), 0..1);
+            rp.draw(0..(self.settings_current[0].num_bodies * 6), 0..1);
         }
 
-        Ok(vec![ce.finish()])
+        cbs.push(ce.finish());
+
+        Ok(cbs)
     }
 
     fn draw_ui(&mut self, ui: &mut egui::Ui) {
-        self.settings.data[0].ui(ui);
+        self.settings.ui(ui);
+
+        if ui
+            .button("Reset")
+            .on_hover_text("Apply settings and reset simulation")
+            .clicked()
+        {
+            self.sync_settings = true;
+        }
     }
 }

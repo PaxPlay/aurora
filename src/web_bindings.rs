@@ -1,5 +1,5 @@
 use crate::AuroraEvent;
-use std::sync::{Mutex, OnceLock, RwLock};
+use std::sync::{OnceLock, RwLock};
 use wasm_bindgen::prelude::*;
 use web_sys::js_sys;
 use winit::event_loop::EventLoopProxy;
