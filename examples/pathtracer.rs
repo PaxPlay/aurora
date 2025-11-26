@@ -24,6 +24,6 @@ async fn main_async() {
         "path_tracer",
         Box::new(PathTracerView::new(aurora.get_gpu(), &scene)),
     );
-    aurora.add_scene("basic_3d", Box::new(scene));
+    aurora.add_scene("pathtracer", Box::new(scene));
     aurora.run().unwrap();
 }

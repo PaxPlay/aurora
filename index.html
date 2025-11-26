@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-    <meta charset="utf-8"/>
+    <meta charset="utf-8" />
     <title>Aurora</title>
     <style>
         :root {
@@ -15,20 +15,18 @@
 
         canvas {
             background-color: black;
-            width: min(96vw, 1600px);
-            height: min(85vh, 1000px);
-            max-width: 100%;
-            max-height: 100%;
+            width: 100%;
+            height: 100%;
+            outline: none;
         }
 
         div.aurora-container {
             display: flex;
             justify-content: center;
-            align-items: center;
-            width: 100%;
-            flex: 1;
-            padding: 0 0 3rem;
-            min-height: calc(100vh - 8rem);
+            align-items: stretch;
+            position: relative;
+            min-width: 0;
+            min-height: 0;
         }
 
         body {
@@ -36,9 +34,9 @@
             margin: 0;
             font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
             color: var(--text);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
         }
 
         p {
@@ -57,7 +55,6 @@
             background: var(--secondary);
             border-bottom: 1px solid var(--accent);
             color: var(--text);
-            margin-bottom: 1.5rem;
         }
 
         .scene-nav__label {
@@ -94,7 +91,7 @@
             margin-right: 0;
         }
 
-        .scene-nav__item + .scene-nav__item::before {
+        .scene-nav__item+.scene-nav__item::before {
             content: "";
             position: absolute;
             left: -0.85rem;
@@ -127,69 +124,119 @@
         .scene-nav__item:focus-visible::after {
             opacity: 1;
         }
+
+        .scene-nav__external-links {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .scene-nav__external-links a {
+            color: var(--text);
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .scene-nav__external-links a:hover,
+        .scene-nav__external-links a:focus-visible {
+            color: var(--accent);
+            outline: none;
+        }
+
+        .scene-nav__external-links svg {
+            width: 24px;
+            height: 24px;
+        }
     </style>
-    <link data-trunk rel="copy-dir" href="models"/>
+    <link data-trunk rel="copy-dir" href="models" />
 </head>
 
 <body>
-<nav class="scene-nav" aria-label="Scene selector">
-    <span class="scene-nav__label" id="scene-nav-label">Loading scenes…</span>
-    <div class="scene-nav__items" id="scene-nav-items"></div>
-</nav>
-<div class="aurora-container" id="aurora-container">
-    <canvas id="aurora"></canvas>
-</div>
-<script type="module">
-    const navLabel = document.getElementById("scene-nav-label");
-    const navItems = document.getElementById("scene-nav-items");
+    <nav class="scene-nav" aria-label="Scene selector">
+        <span class="scene-nav__label" id="scene-nav-label">Loading scenes…</span>
+        <div class="scene-nav__items" id="scene-nav-items"></div>
+        <div class="scene-nav__external-links">
+            <a href="https://github.com/paxplay/aurora" target="_blank" rel="noopener noreferrer"
+                aria-label="GitHub repository">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                    <path
+                        d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.91 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+                </svg>
+            </a>
+        </div>
+    </nav>
+    <div class="aurora-container" id="aurora-container">
+        <canvas id="aurora"></canvas>
+    </div>
+    <script type="module">
+        const navLabel = document.getElementById("scene-nav-label");
+        const navItems = document.getElementById("scene-nav-items");
 
-    function renderSceneButtons(getScenes, setScene) {
-        if (!navItems || !navLabel) {
-            return;
+        function renderSceneButtons(getScenes, setScene) {
+            if (!navItems || !navLabel) {
+                return;
+            }
+
+            navItems.textContent = "";
+            const scenes = Array.from(getScenes()).map((scene) => String(scene));
+
+            if (!scenes.length) {
+                navLabel.textContent = "No scenes available";
+                return;
+            }
+
+            navLabel.textContent = "Scenes";
+
+            scenes.forEach((scene) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "scene-nav__item";
+                button.textContent = scene;
+                button.addEventListener("click", () => setScene(scene));
+                navItems.appendChild(button);
+            });
         }
 
-        navItems.textContent = "";
-        const scenes = Array.from(getScenes()).map((scene) => String(scene));
+        window.addEventListener("AuroraInitialized", (event) => {
+            const wasm = window.wasmBindings
+            if (!wasm) {
+                console.warn("WASM bindings not initialized on AuroraInitialized event");
+                return;
+            }
 
-        if (!scenes.length) {
-            navLabel.textContent = "No scenes available";
-            return;
-        }
+            const canvas = document.getElementById("aurora");
+            const container = document.getElementById("aurora-container");
 
-        navLabel.textContent = "Scenes";
+            if (canvas && container) {
+                const observer = new ResizeObserver(entries => {
+                    for (let entry of entries) {
+                        const { width, height } = entry.contentRect;
+                        canvas.style.width = `${width}px`;
+                        canvas.style.height = `${height}px`;
+                        canvas.width = Math.max(width, 512);
+                        canvas.height = Math.max(height, 512);
+                    }
+                });
 
-        scenes.forEach((scene) => {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.className = "scene-nav__item";
-            button.textContent = scene;
-            button.addEventListener("click", () => setScene(scene));
-            navItems.appendChild(button);
-        });
-    }
+                observer.observe(container);
+            }
 
-    window.addEventListener("AuroraInitialized", (event) => {
-        const wasm = window.wasmBindings
-        if (!wasm) {
-            console.warn("WASM bindings not initialized on AuroraInitialized event");
-            return;
-        }
+            const getScenes = wasm.get_available_scenes;
+            const setScene = wasm.set_scene;
 
-        const getScenes = wasm.get_available_scenes;
-        const setScene = wasm.set_scene;
+            if (typeof getScenes !== "function" || typeof setScene !== "function") {
+                console.warn("Scene bindings not found on wasm exports", wasm);
+                return;
+            }
 
-        if (typeof getScenes !== "function" || typeof setScene !== "function") {
-            console.warn("Scene bindings not found on wasm exports", wasm);
-            return;
-        }
-
-        try {
-            renderSceneButtons(getScenes, setScene);
-        } catch (error) {
-            console.error("Failed to populate scene navigation", error);
-        }
-    }, {once: true});
-</script>
+            try {
+                renderSceneButtons(getScenes, setScene);
+            } catch (error) {
+                console.error("Failed to populate scene navigation", error);
+            }
+        }, { once: true });
+    </script>
 </body>
 
 </html>

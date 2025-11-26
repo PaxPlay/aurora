@@ -1,7 +1,7 @@
 name: Aurora Pathtracer GitHub Pages
 on:
   push:
-    branches: [ master ]
+    branches: [master]
 jobs:
   build-trunk-pathtracer:
     runs-on: ubuntu-latest
@@ -23,7 +23,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-      - run: trunk build --public-url ./ --release --example multi_scene
+      - run: trunk build --public-url ./ --release --example multi_scene --minify
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
