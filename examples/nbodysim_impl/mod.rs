@@ -6,7 +6,6 @@ use aurora::{
     shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline, RenderPipeline},
     CommandEncoderTimestampExt, GpuContext, RenderTarget, TimestampQueries,
 };
-use rand::{rngs::SmallRng, Rng, SeedableRng};
 use std::f32;
 use std::sync::Arc;
 use wgpu::CommandBuffer;
