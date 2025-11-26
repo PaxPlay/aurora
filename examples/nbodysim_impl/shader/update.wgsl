@@ -25,22 +25,22 @@ fn cs_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Update position
         position += velocity * time_step;
 
-        if position.x < 0.0 {
-            position.x = -position.x;
-            velocity.x = -velocity.x;
-        }
-        if position.x > 1.0 {
-            position.x = 2.0 - position.x;
-            velocity.x = -velocity.x;
-        }
-        if position.y < 0.0 {
-            position.y = -position.y;
-            velocity.y = -velocity.y;
-        }
-        if position.y > 1.0 {
-            position.y = 2.0 - position.y;
-            velocity.y = -velocity.y;
-        }
+//        if position.x < 0.0 {
+//            position.x = -position.x;
+//            velocity.x = -velocity.x;
+//        }
+//        if position.x > 1.0 {
+//            position.x = 2.0 - position.x;
+//            velocity.x = -velocity.x;
+//        }
+//        if position.y < 0.0 {
+//            position.y = -position.y;
+//            velocity.y = -velocity.y;
+//        }
+//        if position.y > 1.0 {
+//            position.y = 2.0 - position.y;
+//            velocity.y = -velocity.y;
+//        }
 
         velocities[index] = velocity;
         positions[index] = position;

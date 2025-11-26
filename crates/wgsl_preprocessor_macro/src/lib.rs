@@ -84,6 +84,21 @@ pub fn wgsl(input: TokenStream) -> TokenStream {
             .into()
         }
         Err(e) => {
+            if let PreprocessorError::FileNotFound { path } = e {
+                let error_msg = format!(
+                    "WGSL file not found: {}, include_dirs: {:?}",
+                    path,
+                    include_dir_candidates
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect::<Vec<String>>()
+                );
+                return quote! {
+                    compile_error!(#error_msg)
+                }
+                .into();
+            }
+
             let error_msg = format!("WGSL preprocessing failed: {}", e);
             quote! {
                 compile_error!(#error_msg)

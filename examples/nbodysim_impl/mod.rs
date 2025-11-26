@@ -51,6 +51,7 @@ pub struct NBodySim {
     settings: NBodySimSettings,
     settings_current: MirroredBuffer<NBodySimSettings>,
     sync_settings: bool,
+    re_initialize: bool,
     copy_util: BufferCopyUtil,
 
     // particle_positions: Buffer<f32>,
@@ -66,6 +67,7 @@ pub struct NBodySim {
     pipeline_render: RenderPipeline,
     pipeline_calculate_forces: ComputePipeline,
     pipeline_update: ComputePipeline,
+    pipeline_initialize: ComputePipeline,
 }
 
 impl NBodySim {
@@ -79,7 +81,7 @@ impl NBodySim {
         );
 
         let (particle_positions, particle_velocities, particle_forces) =
-            Self::allocate_particles(&gpu, settings.num_bodies as usize, settings.seed as u64);
+            Self::allocate_particles(&gpu, settings.num_bodies as usize);
 
         let copy_util = BufferCopyUtil::new(2048);
 
@@ -198,10 +200,20 @@ impl NBodySim {
                     ],
                     push_constant_ranges: &[],
                 });
+        let pl = pipeline_layout_update.clone();
         let pipeline_update = compute_pipeline!(gpu, nbodysim_update; &wgpu::ComputePipelineDescriptor {
             label: Some("nbodysim_pipeline_update"),
-            layout: Some(&pipeline_layout_update),
+            layout: Some(&pl),
             module: &nbodysim_update,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        register_default!(gpu.shaders, "nbodysim_initialize", "initialize.wgsl");
+        let pipeline_initialize = compute_pipeline!(gpu, nbodysim_initialize; &wgpu::ComputePipelineDescriptor {
+            label: Some("nbodysim_pipeline_initialize"),
+            layout: Some(&pipeline_layout_update),
+            module: &nbodysim_initialize,
             entry_point: Some("cs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
@@ -253,6 +265,7 @@ impl NBodySim {
             settings,
             settings_current: settings_buffer,
             sync_settings: false,
+            re_initialize: true,
             copy_util,
             // particle_positions,
             // particle_velocities,
@@ -267,13 +280,13 @@ impl NBodySim {
             pipeline_render,
             pipeline_calculate_forces,
             pipeline_update,
+            pipeline_initialize,
         }
     }
 
     fn allocate_particles(
         gpu: &GpuContext,
         num_bodies: usize,
-        seed: u64,
     ) -> (Buffer<f32>, Buffer<f32>, Buffer<f32>) {
         let particle_positions = gpu.create_buffer(
             "Particle Positions",
@@ -297,39 +310,39 @@ impl NBodySim {
                 | wgpu::BufferUsages::COPY_SRC,
         );
 
-        let mut rng = SmallRng::seed_from_u64(seed);
-        let mut position_vector: Vec<f32> = Vec::with_capacity(4 * num_bodies as usize);
-        for _ in 0..num_bodies as usize {
-            position_vector.push(rng.random::<f32>());
-            position_vector.push(rng.random::<f32>());
-            position_vector.push(0.0);
-            position_vector.push(0.0);
-        }
-
-        gpu.queue.write_buffer(
-            &particle_positions,
-            0,
-            bytemuck::cast_slice(&position_vector),
-        );
-
-        let mut velocity_vector: Vec<f32> = Vec::with_capacity(4 * num_bodies as usize);
-        for _ in 0..num_bodies as usize {
-            let a = rng.random::<f32>() * f32::consts::PI * 2.0f32;
-
-            velocity_vector.push(a.cos() * 0.001);
-            velocity_vector.push(a.sin() * 0.001);
-            velocity_vector.push(0.0);
-            velocity_vector.push(0.0);
-        }
-        gpu.queue.write_buffer(
-            &particle_velocities,
-            0,
-            bytemuck::cast_slice(&velocity_vector),
-        );
-
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("Polling failed when initializing NBodySim buffers");
+        // let mut rng = SmallRng::seed_from_u64(seed);
+        // let mut position_vector: Vec<f32> = Vec::with_capacity(4 * num_bodies as usize);
+        // for _ in 0..num_bodies as usize {
+        //     position_vector.push(rng.random::<f32>());
+        //     position_vector.push(rng.random::<f32>());
+        //     position_vector.push(0.0);
+        //     position_vector.push(0.0);
+        // }
+        //
+        // gpu.queue.write_buffer(
+        //     &particle_positions,
+        //     0,
+        //     bytemuck::cast_slice(&position_vector),
+        // );
+        //
+        // let mut velocity_vector: Vec<f32> = Vec::with_capacity(4 * num_bodies as usize);
+        // for _ in 0..num_bodies as usize {
+        //     let a = rng.random::<f32>() * f32::consts::PI * 2.0f32;
+        //
+        //     velocity_vector.push(a.cos() * 0.001);
+        //     velocity_vector.push(a.sin() * 0.001);
+        //     velocity_vector.push(0.0);
+        //     velocity_vector.push(0.0);
+        // }
+        // gpu.queue.write_buffer(
+        //     &particle_velocities,
+        //     0,
+        //     bytemuck::cast_slice(&velocity_vector),
+        // );
+        //
+        // gpu.device
+        //     .poll(wgpu::PollType::wait_indefinitely())
+        //     .expect("Polling failed when initializing NBodySim buffers");
 
         (particle_positions, particle_velocities, particle_forces)
     }
@@ -371,11 +384,8 @@ impl NBodySim {
         (bind_group_ro, bind_group_update, bind_group_forces)
     }
     fn reallocate_particles(&mut self, gpu: &GpuContext) {
-        let (particle_positions, particle_velocities, particle_forces) = Self::allocate_particles(
-            gpu,
-            self.settings_current.data[0].num_bodies as usize,
-            self.settings_current.data[0].seed as u64,
-        );
+        let (particle_positions, particle_velocities, particle_forces) =
+            Self::allocate_particles(gpu, self.settings_current.data[0].num_bodies as usize);
 
         let (bind_group_ro, bind_group_update, bind_group_forces) = Self::create_bind_groups(
             particle_positions,
@@ -400,6 +410,12 @@ impl Scene for NBodySim {
         queries: &mut TimestampQueries,
     ) -> Result<Vec<CommandBuffer>, SceneRenderError> {
         let mut cbs = Vec::with_capacity(2);
+        let mut ce = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("nbodysim_ce"),
+            });
+
         if self.sync_settings {
             self.settings_current[0] = self.settings.clone();
             cbs.push(self.copy_util.create_copy_command(&gpu, |ctx| {
@@ -408,14 +424,20 @@ impl Scene for NBodySim {
 
             self.reallocate_particles(&gpu);
 
+            self.re_initialize = true;
             self.sync_settings = false;
         }
 
-        let mut ce = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("nbodysim_ce"),
-            });
+        if self.re_initialize {
+            let mut init_cp = ce.begin_compute_pass_timestamped("nbodysim_init_cp", queries);
+            init_cp.set_bind_group(0, &self.bind_group_update, &[]);
+            init_cp.set_bind_group(1, &self.bind_group_settings, &[]);
+            init_cp.set_pipeline(&self.pipeline_initialize.get()?);
+            let (x, y, z) = dispatch_size((self.settings_current[0].num_bodies, 1, 1), (64, 1, 1));
+            init_cp.dispatch_workgroups(x, y, z);
+
+            self.re_initialize = false;
+        }
 
         {
             let mut cp = ce.begin_compute_pass_timestamped("nbodysim_cp", queries);
@@ -461,12 +483,22 @@ impl Scene for NBodySim {
     fn draw_ui(&mut self, ui: &mut egui::Ui) {
         self.settings.ui(ui);
 
-        if ui
-            .button("Reset")
-            .on_hover_text("Apply settings and reset simulation")
-            .clicked()
-        {
-            self.sync_settings = true;
-        }
+        ui.horizontal(|ui| {
+            if ui
+                .button("Reset")
+                .on_hover_text("Reset simulation without applying settings")
+                .clicked()
+            {
+                self.re_initialize = true;
+            }
+
+            if ui
+                .button("Apply Settings")
+                .on_hover_text("Apply settings and reset simulation")
+                .clicked()
+            {
+                self.sync_settings = true;
+            }
+        });
     }
 }

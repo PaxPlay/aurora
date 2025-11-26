@@ -30,11 +30,13 @@ fn pcg_next_square(pcg: ptr<function, PCG>) -> vec2<f32> {
     return vec2(pcg_next_f32(pcg), pcg_next_f32(pcg));
 }
 
-fn warp_square_to_hemisphere(sample: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
-    let cosTheta = sample.x;
+const _RANDOM_PI: f32 = 3.14159265359;
+
+fn warp_square_to_hemisphere(random_sample: vec2<f32>, n: vec3<f32>) -> vec3<f32> {
+    let cosTheta = random_sample.x;
     let sinTheta = sqrt(1.0 - cosTheta * cosTheta);
 
-    let phi = 2.0 * PI * sample.y;
+    let phi = 2.0 * _RANDOM_PI * random_sample.y;
     let sinPhi = sin(phi);
     let cosPhi = cos(phi);
 
