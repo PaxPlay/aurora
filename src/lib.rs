@@ -3,6 +3,7 @@ pub mod files;
 mod internal;
 pub mod scenes;
 pub mod shader;
+pub mod vis;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testing;

@@ -15,6 +15,8 @@ pub struct FileWriter {
     writer: std::io::BufWriter<std::fs::File>,
 }
 
+pub type FileReader = futures::io::Cursor<Vec<u8>>;
+
 impl Deref for FileWriter {
     #[cfg(target_arch = "wasm32")]
     type Target = Cursor<Vec<u8>>;
@@ -91,6 +93,8 @@ impl Drop for FileWriter {
     }
 }
 
+/// Platform-agnostic filesystem wrapper. Needed for browser/WASM support, as files are fetched
+/// over the network.
 pub struct Filesystem {
     out_dir: PathBuf,
 }
@@ -133,7 +137,7 @@ impl Filesystem {
         }
     }
 
-    pub async fn create_reader(&self, filename: &str) -> futures::io::Cursor<Vec<u8>> {
+    pub async fn create_reader(&self, filename: &str) -> FileReader {
         cfg_if::cfg_if! {
             if #[cfg(target_arch = "wasm32")] {
                 let location = web_sys::window().expect("should have a window").location();
