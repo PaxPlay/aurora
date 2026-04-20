@@ -1,0 +1,13 @@
+NRRD0004
+# Complete NRRD file format specification at:
+# http://teem.sourceforge.net/nrrd/format.html
+type: uint8
+dimension: 3
+space: left-posterior-superior
+sizes: 103 94 161
+space directions: (1,0,0) (0,1,0) (0,0,1)
+kinds: domain domain domain
+endian: little
+encoding: raw
+space origin: (-51.5,-47.0,-80.5)
+data file: tooth_103x94x161_uint8.raw
