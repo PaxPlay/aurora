@@ -1,5 +1,5 @@
-use glam::vec3;
-use glam::{Mat4, UVec2, Vec3, Vec4};
+use glam::{vec2, vec3};
+use glam::{Mat4, UVec2, Vec2, Vec3, Vec4};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::f32::consts::*;
 use std::sync::Arc;
+use winit::event::{DeviceEvent, WindowEvent};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SceneRenderError {
@@ -40,6 +41,14 @@ pub trait Scene {
     fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
 
     fn update_target_parameters(&mut self, _gpu: Arc<GpuContext>, _target: Arc<RenderTarget>) {}
+
+    fn on_window_event(&mut self, _event: &winit::event::WindowEvent) -> bool {
+        false
+    }
+
+    fn on_device_event(&mut self, event: &winit::event::DeviceEvent) -> bool {
+        false
+    }
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -204,10 +213,6 @@ impl Camera3d {
         }
     }
 
-    //fn handle_keyboard_input() {}
-
-    //fn handle_mouse_movement() {}
-
     fn to_centered(&mut self) {
         match *self {
             Self::Centered { .. } => (),
@@ -335,10 +340,161 @@ impl Camera3d {
     }
 }
 
+pub struct CameraController {
+    is_capturing_mouse: bool,
+    is_holding_w: bool,
+    is_holding_a: bool,
+    is_holding_s: bool,
+    is_holding_d: bool,
+    is_holding_space: bool,
+    is_holding_ctrl: bool,
+    accumulated_mouse_movement: Vec2,
+}
+
+impl CameraController {
+    fn new() -> Self {
+        Self {
+            is_capturing_mouse: false,
+            is_holding_w: false,
+            is_holding_a: false,
+            is_holding_s: false,
+            is_holding_d: false,
+            is_holding_space: false,
+            is_holding_ctrl: false,
+            accumulated_mouse_movement: vec2(0.0, 0.0),
+        }
+    }
+
+    fn capture_key_change(
+        state: winit::event::ElementState,
+        is_holding: &mut bool,
+        captured: &mut bool,
+    ) {
+        *is_holding = state.is_pressed();
+        *captured = true;
+    }
+
+    pub fn on_window_event(&mut self, event: &winit::event::WindowEvent) -> bool {
+        use winit::event::ElementState as ES;
+        use winit::event::WindowEvent as WE;
+        let mut consumed = false;
+        match event {
+            WE::KeyboardInput { event, .. } => {
+                use winit::keyboard::KeyCode as KC;
+                if let winit::keyboard::PhysicalKey::Code(code) = event.physical_key {
+                    match code {
+                        KC::Escape => {
+                            if event.state == ES::Pressed {
+                                self.is_capturing_mouse = false;
+                                consumed = true;
+                            }
+                        }
+                        KC::KeyW => Self::capture_key_change(
+                            event.state,
+                            &mut self.is_holding_w,
+                            &mut consumed,
+                        ),
+                        KC::KeyA => Self::capture_key_change(
+                            event.state,
+                            &mut self.is_holding_a,
+                            &mut consumed,
+                        ),
+                        KC::KeyS => Self::capture_key_change(
+                            event.state,
+                            &mut self.is_holding_s,
+                            &mut consumed,
+                        ),
+                        KC::KeyD => Self::capture_key_change(
+                            event.state,
+                            &mut self.is_holding_d,
+                            &mut consumed,
+                        ),
+                        KC::Space => Self::capture_key_change(
+                            event.state,
+                            &mut self.is_holding_space,
+                            &mut consumed,
+                        ),
+                        KC::ControlLeft => Self::capture_key_change(
+                            event.state,
+                            &mut self.is_holding_ctrl,
+                            &mut consumed,
+                        ),
+                        _ => (),
+                    }
+                }
+            }
+            WE::MouseInput { state, button, .. } => {
+                if state.is_pressed()
+                    && *button == winit::event::MouseButton::Left
+                    && !self.is_capturing_mouse
+                {
+                    self.is_capturing_mouse = true;
+                }
+            }
+            WE::Focused(focused) => {
+                if !focused {
+                    self.is_capturing_mouse = false;
+                    self.is_holding_w = false;
+                    self.is_holding_a = false;
+                    self.is_holding_s = false;
+                    self.is_holding_d = false;
+                    self.is_holding_space = false;
+                    self.is_holding_ctrl = false;
+                }
+            }
+
+            _ => {
+                consumed = false;
+            }
+        }
+
+        consumed
+    }
+
+    pub fn on_device_event(&mut self, event: &winit::event::DeviceEvent) -> bool {
+        use winit::event::DeviceEvent as DE;
+        match event {
+            DE::MouseMotion { delta } => {
+                if self.is_capturing_mouse {
+                    self.accumulated_mouse_movement += vec2(delta.0 as f32, delta.1 as f32);
+                    return true;
+                }
+            }
+            _ => (),
+        }
+
+        false
+    }
+
+    fn update_camera(&mut self, camera: &mut Camera3d) -> bool {
+        let mut updated = false;
+
+        if self.accumulated_mouse_movement.length_squared() > 1e-5 {
+            let sensitivity = 0.002;
+            let delta = self.accumulated_mouse_movement * sensitivity;
+            self.accumulated_mouse_movement = vec2(0.0, 0.0);
+
+            match camera {
+                Camera3d::Centered { angle, .. }
+                | Camera3d::Perspective { angle, .. }
+                | Camera3d::Orthographic { angle, .. } => {
+                    angle.yaw -= delta.x;
+                    angle.pitch -= delta.y;
+                    *angle = angle.normalize();
+                }
+            }
+
+            updated = true;
+        }
+        updated
+    }
+}
+
 pub struct CameraWithBuffer {
     pub camera: Camera3d,
     pub resolution: [u32; 2],
     pub buffer: Buffer<CameraBuffer>,
+    pub controller: CameraController,
     is_buffer_current: bool,
 }
 
@@ -357,6 +513,7 @@ impl CameraWithBuffer {
             camera,
             resolution,
             buffer,
+            controller: CameraController::new(),
             is_buffer_current: true,
         }
     }
@@ -364,6 +521,7 @@ impl CameraWithBuffer {
     pub fn update_buffer(&mut self, ctx: &mut BufferCopyContext) {
         self.buffer
             .write(ctx, &[CameraBuffer::new(&self.camera, self.resolution)]);
+        self.is_buffer_current = true;
     }
 
     pub fn update_resolution(&mut self, resolution: [u32; 2]) {
@@ -376,6 +534,12 @@ impl CameraWithBuffer {
         };
         *ar = ratio;
         self.is_buffer_current = false;
+    }
+
+    pub fn process_controller_update(&mut self) {
+        if self.controller.update_camera(&mut self.camera) {
+            self.is_buffer_current = false;
+        }
     }
 
     pub fn is_buffer_current(&self) -> bool {
@@ -989,9 +1153,18 @@ impl Scene for BasicScene3d {
     ) -> Result<Vec<wgpu::CommandBuffer>, SceneRenderError> {
         let mut res: Vec<wgpu::CommandBuffer> = Vec::with_capacity(3);
 
-        res.push(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
-            self.camera.update_buffer(ctx);
-        }));
+        self.camera.process_controller_update();
+        if !self.camera.is_buffer_current() {
+            res.push(self.buffer_copy_util.create_copy_command(&gpu, |ctx| {
+                self.camera.update_buffer(ctx);
+            }));
+
+            self.views
+                .get(&self.current_view)
+                .expect("Selected view does not exist")
+                .borrow_mut()
+                .on_parameter_update();
+        }
 
         let mut view = self
             .views
@@ -1025,6 +1198,13 @@ impl Scene for BasicScene3d {
             .borrow_mut()
             .draw_ui(ui);
     }
+
+    fn on_window_event(&mut self, event: &WindowEvent) -> bool {
+        self.camera.controller.on_window_event(event)
+    }
+    fn on_device_event(&mut self, event: &DeviceEvent) -> bool {
+        self.camera.controller.on_device_event(event)
+    }
 }
 
 pub trait Scene3dView {
@@ -1041,6 +1221,8 @@ pub trait Scene3dView {
     }
 
     fn draw_ui(&mut self, _ui: &mut egui::Ui) {}
+
+    fn on_parameter_update(&mut self) {}
 }
 
 struct WireframeView {

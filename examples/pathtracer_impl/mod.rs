@@ -1098,4 +1098,8 @@ impl Scene3dView for PathTracerView {
             }
         });
     }
+
+    fn on_parameter_update(&mut self) {
+        self.should_clear = true;
+    }
 }

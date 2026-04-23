@@ -36,6 +36,7 @@ use winit::{event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
 use log::{error, info, warn};
 
 use clap::Parser;
+use winit::event::{DeviceEvent, DeviceId};
 use winit::event_loop::EventLoop;
 
 /// Aurora CLI
@@ -393,6 +394,25 @@ impl winit::application::ApplicationHandler<AuroraEvent> for Aurora {
                 );
             }
             _ => (),
+        }
+
+        if let Some(scene) = self.get_current_scene() {
+            if scene.try_borrow_mut().unwrap().on_window_event(&event) {
+                return;
+            }
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if let Some(scene) = self.get_current_scene() {
+            if scene.try_borrow_mut().unwrap().on_device_event(&event) {
+                return;
+            }
         }
     }
 }

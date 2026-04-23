@@ -13,6 +13,7 @@ use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
+use winit::event::{DeviceEvent, WindowEvent};
 
 pub mod nrrd;
 
@@ -281,6 +282,7 @@ impl Scene for ScalarFieldScene {
     ) -> Result<Vec<wgpu::CommandBuffer>, SceneRenderError> {
         let mut result = Vec::with_capacity(2);
 
+        self.camera.process_controller_update();
         if !self.camera.is_buffer_current() {
             result.push(
                 self.buffer_copy_util
@@ -328,4 +330,11 @@ impl Scene for ScalarFieldScene {
     }
 
     fn update_target_parameters(&mut self, _gpu: Arc<GpuContext>, _target: Arc<RenderTarget>) {}
+
+    fn on_window_event(&mut self, event: &WindowEvent) -> bool {
+        self.camera.controller.on_window_event(event)
+    }
+    fn on_device_event(&mut self, event: &DeviceEvent) -> bool {
+        self.camera.controller.on_device_event(event)
+    }
 }
