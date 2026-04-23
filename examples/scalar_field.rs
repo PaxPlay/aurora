@@ -16,9 +16,13 @@ fn main() {
 
 async fn main_async() {
     let mut aurora = Aurora::new().await.unwrap();
-    let scene = ScalarFieldScene::new(aurora.get_gpu(), "models/tooth.nhdr")
-        .await
-        .expect("Failed initializing scalar field scene");
+    let scene = ScalarFieldScene::new(
+        aurora.get_gpu(),
+        "models/tooth.nhdr",
+        aurora.get_target().format,
+    )
+    .await
+    .expect("Failed initializing scalar field scene");
     aurora.add_scene("scalar_field", Box::new(scene));
     aurora.run().unwrap();
 }

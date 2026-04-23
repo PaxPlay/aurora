@@ -361,7 +361,7 @@ impl CameraWithBuffer {
         }
     }
 
-    fn update_buffer(&mut self, ctx: &mut BufferCopyContext) {
+    pub fn update_buffer(&mut self, ctx: &mut BufferCopyContext) {
         self.buffer
             .write(ctx, &[CameraBuffer::new(&self.camera, self.resolution)]);
     }
@@ -376,6 +376,10 @@ impl CameraWithBuffer {
         };
         *ar = ratio;
         self.is_buffer_current = false;
+    }
+
+    pub fn is_buffer_current(&self) -> bool {
+        self.is_buffer_current
     }
 }
 
