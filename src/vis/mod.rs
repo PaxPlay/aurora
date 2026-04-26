@@ -69,7 +69,7 @@ impl ScalarFieldScene {
         let mut data = Vec::new();
         data_file.read_to_end(&mut data).await?;
 
-        let total_size = header.sizes.iter().map(|s| s.get()).product();
+        let total_size = header.sizes.iter().map(|s| s.get()).product::<usize>();
         if data.len() != total_size {
             return Err(CreateScalarFieldSceneError::InvalidDataFileError(format!(
                 "Data file size ({}) does not match expected size from header {} ({:?})",

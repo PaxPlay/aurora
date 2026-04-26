@@ -3,6 +3,7 @@ mod pathtracer_impl;
 
 use crate::pathtracer_impl::PathTracerView;
 use aurora::scenes::BasicScene3d;
+use aurora::vis::ScalarFieldScene;
 use aurora::Aurora;
 use nbodysim_impl::NBodySim;
 
@@ -30,6 +31,15 @@ async fn run() {
         Box::new(PathTracerView::new(aurora.get_gpu(), &scene)),
     );
     aurora.add_scene("pathtracer", Box::new(scene));
+
+    let scene = ScalarFieldScene::new(
+        aurora.get_gpu(),
+        "models/tooth.nhdr",
+        aurora.get_target().format,
+    )
+    .await
+    .expect("Failed initializing scalar field scene");
+    aurora.add_scene("scalarfield", Box::new(scene));
 
     aurora.run().unwrap();
 }
