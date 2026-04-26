@@ -8,7 +8,7 @@ use crate::{
     Buffer, CommandEncoderTimestampExt, DebugUi, GpuContext, RenderTarget, Scene, TimestampQueries,
 };
 use futures_lite::AsyncReadExt;
-use glam::vec3;
+use glam::{vec3, Mat4, Vec3};
 use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
@@ -30,6 +30,73 @@ pub enum CreateScalarFieldSceneError {
 
     #[error("Error allocating GPU resources: {0}")]
     GPUResourcesError(String),
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct ScalarFieldParameters {
+    model_matrix: Mat4,
+}
+
+impl TryFrom<&nrrd::NRRDHeader> for ScalarFieldParameters {
+    type Error = CreateScalarFieldSceneError;
+
+    fn try_from(header: &nrrd::NRRDHeader) -> Result<Self, Self::Error> {
+        if header.dimension.get() != 3 {
+            return Err(CreateScalarFieldSceneError::InvalidDataFileError(
+                "NRRD header dimension is not 3".to_string(),
+            ));
+        }
+
+        let origin = header.space_origin.as_ref().ok_or(
+            CreateScalarFieldSceneError::InvalidDataFileError(
+                "NRRD header must specify space origin".to_string(),
+            ),
+        )?;
+        if origin.len() != 3 {
+            return Err(CreateScalarFieldSceneError::InvalidDataFileError(
+                "NRRD header origin length is not 3".to_string(),
+            ));
+        }
+        let origin = vec3(origin[0] as f32, origin[1] as f32, origin[2] as f32);
+
+        let directions = header.space_directions.as_ref().ok_or(
+            CreateScalarFieldSceneError::InvalidDataFileError(
+                "NRRD header must specify space directions".to_string(),
+            ),
+        )?;
+        if directions.len() != 3 {
+            return Err(CreateScalarFieldSceneError::InvalidDataFileError(
+                "NRRD header directions length is not 3".to_string(),
+            ));
+        }
+        let directions: Vec<Vec3> = directions
+            .iter()
+            .map(|d| -> Result<Vec3, CreateScalarFieldSceneError> {
+                if let Some(v) = d {
+                    if v.len() != 3 {
+                        return Err(CreateScalarFieldSceneError::InvalidDataFileError(
+                            "NRRD header space direction length is not 3".to_string(),
+                        ));
+                    }
+                    Ok(vec3(v[0] as f32, v[1] as f32, v[2] as f32))
+                } else {
+                    Err(CreateScalarFieldSceneError::InvalidDataFileError(
+                        "Space directions contain none direction".to_string(),
+                    ))
+                }
+            })
+            .collect::<Result<Vec<Vec3>, CreateScalarFieldSceneError>>()?;
+
+        let model_matrix = Mat4::from_cols(
+            directions[0].extend(0.0),
+            directions[1].extend(0.0),
+            directions[2].extend(0.0),
+            origin.extend(1.0),
+        );
+
+        Ok(ScalarFieldParameters { model_matrix })
+    }
 }
 
 pub struct ScalarFieldScene {
@@ -146,7 +213,7 @@ impl ScalarFieldScene {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             lod_min_clamp: 0f32,
             lod_max_clamp: 0f32,
             ..Default::default()
@@ -185,8 +252,8 @@ impl ScalarFieldScene {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("aur_pipeline_layout_scalar_field"),
-                bind_group_layouts: &[&bind_group_layout.get()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[bind_group_layout.get_ref()],
+                immediate_size: 0,
             });
 
         let vertices: [f32; 24] = [
@@ -255,11 +322,11 @@ impl ScalarFieldScene {
                     })
                 ]
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
-        let buffer_copy_util = BufferCopyUtil::new(2048);
+        let buffer_copy_util = BufferCopyUtil::new(gpu.device.clone(), 2048);
 
         Ok(ScalarFieldScene {
             data,
@@ -311,6 +378,7 @@ impl Scene for ScalarFieldScene {
                 depth_stencil_attachment: None,
                 timestamp_writes: queries.render_pass_writes("rp_scalar_field"),
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             rp.set_pipeline(&self.pipeline.get()?);

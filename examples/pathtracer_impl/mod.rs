@@ -6,7 +6,7 @@ use aurora::{
     CircularBuffer, CommandEncoderTimestampExt, GpuContext, TimestampQueries,
 };
 use log::{info, warn};
-use rand::Rng;
+use rand::{RngExt, SeedableRng};
 use std::{
     num::NonZero,
     ops::DerefMut,
@@ -220,7 +220,7 @@ pub struct PathTracerView {
     bgl_image: BindGroupLayout,
     bg_image: Option<wgpu::BindGroup>,
     buffer_copy_util: aurora::buffers::BufferCopyUtil,
-    rng: rand::rngs::ThreadRng,
+    rng: rand_pcg::Pcg64,
     should_clear: bool,
     settings: MirroredBuffer<PathTracerSettings>,
     buffer_schedule_reorder: Buffer<u32>,
@@ -496,12 +496,12 @@ impl PathTracerView {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_handle_intersections"),
                     bind_group_layouts: &[
-                        &bgl_camera.get(),
-                        &bgl_rays.get(),
-                        &bgl_schedule.get(),
-                        &scene.gpu_scene_geometry.bind_group_layout.get(),
+                        bgl_camera.get_ref(),
+                        bgl_rays.get_ref(),
+                        bgl_schedule.get_ref(),
+                        scene.gpu_scene_geometry.bind_group_layout.get_ref(),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
         let pipeline_layout_primary =
@@ -509,11 +509,11 @@ impl PathTracerView {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_primary"),
                     bind_group_layouts: &[
-                        &bgl_camera.get(),
-                        &bgl_rays.get(),
-                        &bgl_schedule_invocations.get(),
+                        bgl_camera.get_ref(),
+                        bgl_rays.get_ref(),
+                        bgl_schedule_invocations.get_ref(),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
         let pipeline_layout_intersect =
@@ -521,19 +521,19 @@ impl PathTracerView {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_intersect"),
                     bind_group_layouts: &[
-                        &bgl_rays.get(),
-                        &bgl_schedule.get(),
-                        &scene.gpu_scene_geometry.bind_group_layout.get(),
+                        bgl_rays.get_ref(),
+                        bgl_schedule.get_ref(),
+                        scene.gpu_scene_geometry.bind_group_layout.get_ref(),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
         let pipeline_layout_reorder_intersect =
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_reorder_intersect"),
-                    bind_group_layouts: &[&bgl_reorder_intersect.get()],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[bgl_reorder_intersect.get_ref()],
+                    immediate_size: 0,
                 });
 
         let pipeline_layout_image =
@@ -541,27 +541,27 @@ impl PathTracerView {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_image"),
                     bind_group_layouts: &[
-                        &bgl_camera.get(),
-                        &bgl_rays.get(),
-                        &bgl_image.get(),
-                        &bgl_schedule_copy.get(),
+                        bgl_camera.get_ref(),
+                        bgl_rays.get_ref(),
+                        bgl_image.get_ref(),
+                        bgl_schedule_copy.get_ref(),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
         let pipeline_layout_schedule =
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_schedule"),
-                    bind_group_layouts: &[&bgl_schedule_invocations.get()],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[bgl_schedule_invocations.get_ref()],
+                    immediate_size: 0,
                 });
         let pipeline_layout_nee_miss =
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("pt_pipeline_layout_nee_miss"),
-                    bind_group_layouts: &[&bgl_rays.get(), &bgl_schedule.get()],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[bgl_rays.get_ref(), bgl_schedule.get_ref()],
+                    immediate_size: 0,
                 });
 
         register_default!(gpu.shaders, "schedule", "schedule.wgsl");
@@ -651,6 +651,8 @@ impl PathTracerView {
         });
 
         let stats = Arc::new(Mutex::new(PathTracerStats::new(64)));
+        let buffer_copy_util = aurora::buffers::BufferCopyUtil::new(gpu.device.clone(), 2048);
+        let rng = rand_pcg::Pcg64::from_seed([0u8; 32]);
 
         Self {
             gpu,
@@ -678,8 +680,8 @@ impl PathTracerView {
             image_target_format,
             bgl_image,
             bg_image: None,
-            buffer_copy_util: aurora::buffers::BufferCopyUtil::new(2048),
-            rng: rand::rng(),
+            buffer_copy_util,
+            rng,
             should_clear: true,
             settings,
             buffer_schedule_reorder,
@@ -917,8 +919,8 @@ impl PathTracerView {
 
 impl Scene3dView for PathTracerView {
     fn copy(&mut self, gpu: Arc<GpuContext>) -> Vec<wgpu::CommandBuffer> {
-        // rust is fun some times
-        let seeds: Vec<_> = self.rng.clone().random_iter::<u32>().take(64).collect();
+        // rust is fun sometimes
+        let seeds: Vec<_> = (&mut self.rng).random_iter::<u32>().take(64).collect();
         // let mut seeds: Vec<u32> = Vec::with_capacity(16);
         // seeds.resize(16, 0);
 

@@ -72,15 +72,9 @@ impl<T: bytemuck::Pod> Buffer<T> {
             &self.buffer,
             0,
             NonZero::new(size_of_val(data) as u64).unwrap(),
-            ctx.device,
         );
 
-        let res: Result<&mut [u8], _> = bytemuck::try_cast_slice_mut(&mut buffer_view);
-        if let Ok(content) = res {
-            content.copy_from_slice(data_cast);
-        } else {
-            error!(target: "aurora::buffers", "Failed writing buffer {}: {}", self.label, res.err().unwrap());
-        }
+        buffer_view.copy_from_slice(data_cast);
     }
 }
 
@@ -97,8 +91,8 @@ pub struct BufferCopyUtil {
 }
 
 impl BufferCopyUtil {
-    pub fn new(chunk_size: u64) -> Self {
-        let staging_belt = wgpu::util::StagingBelt::new(chunk_size);
+    pub fn new(device: wgpu::Device, chunk_size: u64) -> Self {
+        let staging_belt = wgpu::util::StagingBelt::new(device, chunk_size);
 
         Self { staging_belt }
     }
@@ -195,8 +189,8 @@ impl BufferConvertCopy {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("pt_pipeline_layout"),
-                bind_group_layouts: &[&bgl.get()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[bgl.get_ref()],
+                immediate_size: 0,
             });
 
         let pipeline = compute_pipeline!(gpu, convert_f32_f16; &wgpu::ComputePipelineDescriptor {

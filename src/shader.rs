@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::num::NonZero;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::buffers::Buffer;
@@ -468,6 +469,10 @@ impl BindGroupLayout {
 
     pub fn get(&self) -> wgpu::BindGroupLayout {
         self.layout.clone()
+    }
+
+    pub fn get_ref(&self) -> Option<&wgpu::BindGroupLayout> {
+        Some(&self.layout)
     }
 }
 

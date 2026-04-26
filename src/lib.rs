@@ -262,11 +262,15 @@ impl Aurora {
 
     fn create_surface_texture(&self) -> (wgpu::SurfaceTexture, wgpu::TextureView) {
         let window = self.get_window();
-        let texture = window.surface.get_current_texture().unwrap();
-        let view = texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        (texture, view)
+        use wgpu::CurrentSurfaceTexture::Success;
+        if let Success(texture) = window.surface.get_current_texture() {
+            let view = texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            (texture, view)
+        } else {
+            panic!("Failed to acquire next surface texture!");
+        }
     }
 
     pub fn get_gpu(&self) -> Arc<GpuContext> {
@@ -442,7 +446,9 @@ pub enum NewGpuContextError {
 
 impl GpuContext {
     #[cfg(not(target_arch = "wasm32"))]
-    fn select_adapter(instance: &wgpu::Instance) -> Result<wgpu::Adapter, NewGpuContextError> {
+    async fn select_adapter(
+        instance: &wgpu::Instance,
+    ) -> Result<wgpu::Adapter, NewGpuContextError> {
         const ADAPTER_PRIORITIES: [wgpu::Backend; 5] = [
             wgpu::Backend::Vulkan,
             wgpu::Backend::Metal,
@@ -451,7 +457,7 @@ impl GpuContext {
             wgpu::Backend::Gl,
         ];
 
-        let mut adapters = instance.enumerate_adapters(wgpu::Backends::all());
+        let mut adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
         adapters.sort_by_key(|a| {
             for (i, b) in ADAPTER_PRIORITIES.iter().enumerate() {
                 if *b == a.get_info().backend {
@@ -474,9 +480,12 @@ impl GpuContext {
     }
 
     pub async fn new() -> Result<Self, NewGpuContextError> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            flags: wgpu::InstanceFlags::empty(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            display: None,
         });
 
         cfg_if::cfg_if! {
@@ -485,7 +494,7 @@ impl GpuContext {
                     .request_adapter(&wgpu::RequestAdapterOptions::default())
                     .await?;
             } else {
-                let adapter = Self::select_adapter(&instance)?;
+                let adapter = Self::select_adapter(&instance).await?;
             }
         }
 
@@ -694,7 +703,7 @@ impl AuroraWindow {
             [size.width, size.height],
             SRGB,
         );
-        let buffer_copy_util = BufferCopyUtil::new(2048);
+        let buffer_copy_util = BufferCopyUtil::new(gpu.device.clone(), 2048);
 
         Ok(Self {
             gpu,
@@ -810,12 +819,13 @@ impl UiContext {
                 depth_stencil_attachment: None,
                 timestamp_writes: queries.render_pass_writes("rp_aurora_ui"),
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             let mut rp_static = render_pass.forget_lifetime();
             let input = self.state.take_egui_input(&self.window);
             let egui_ctx = self.state.egui_ctx();
-            let ui_out = egui_ctx.run(input, |ctx| {
-                egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            let ui_out = egui_ctx.run_ui(input, |ctx| {
+                egui::Panel::top("top_panel").show_inside(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.toggle_value(&mut self.show_info_window, "Aurora");
                         ui.separator();

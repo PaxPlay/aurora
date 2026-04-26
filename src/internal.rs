@@ -84,8 +84,8 @@ impl TargetViewPipeline {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("aurora_pipeline_layout_target_view"),
-                bind_group_layouts: &[&bind_group_layout.get()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[bind_group_layout.get_ref()],
+                immediate_size: 0,
             });
 
         register_default!(gpu.shaders, "target_view", "shader/target_view.wgsl");
@@ -124,7 +124,7 @@ impl TargetViewPipeline {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

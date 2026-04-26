@@ -82,7 +82,7 @@ impl NBodySim {
         let (particle_positions, particle_velocities, particle_forces) =
             Self::allocate_particles(&gpu, settings.num_bodies as usize);
 
-        let copy_util = BufferCopyUtil::new(2048);
+        let copy_util = BufferCopyUtil::new(gpu.device.clone(), 2048);
 
         let bind_group_layout_settings = BindGroupLayoutBuilder::new(gpu.clone())
             .label("nbodysim_settings_bgl")
@@ -174,10 +174,10 @@ impl NBodySim {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("nbodysim_pipeline_layout_forces"),
                     bind_group_layouts: &[
-                        &bind_group_layout_forces.get(),
-                        &bind_group_layout_settings.get(),
+                        bind_group_layout_forces.get_ref(),
+                        bind_group_layout_settings.get_ref(),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
         let pipeline_calculate_forces = compute_pipeline!(gpu, nbodysim_forces; &wgpu::ComputePipelineDescriptor {
             label: Some("nbodysim_pipeline_calculate_forces"),
@@ -194,10 +194,10 @@ impl NBodySim {
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("nbodysim_pipeline_layout_update"),
                     bind_group_layouts: &[
-                        &bind_group_layout_update.get(),
-                        &bind_group_layout_settings.get(),
+                        bind_group_layout_update.get_ref(),
+                        bind_group_layout_settings.get_ref(),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
         let pl = pipeline_layout_update.clone();
         let pipeline_update = compute_pipeline!(gpu, nbodysim_update; &wgpu::ComputePipelineDescriptor {
@@ -223,8 +223,8 @@ impl NBodySim {
             gpu.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("nbodysim_pipeline_layout"),
-                    bind_group_layouts: &[&bind_group_layout_ro.get()],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[bind_group_layout_ro.get_ref()],
+                    immediate_size: 0,
                 });
         let pipeline_render = render_pipeline!(gpu, nbodysim_render; &wgpu::RenderPipelineDescriptor {
             label: Some("nbodysim_pipeline_render"),
@@ -256,7 +256,7 @@ impl NBodySim {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -467,6 +467,7 @@ impl Scene for NBodySim {
                 depth_stencil_attachment: None,
                 timestamp_writes: queries.render_pass_writes("nbodysim_rp"),
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             rp.set_bind_group(0, &self.bind_group_ro, &[]);

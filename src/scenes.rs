@@ -1117,7 +1117,7 @@ impl BasicScene3d {
 
         register_default!(gpu.shaders, "wireframe", "wireframe.wgsl");
 
-        let buffer_copy_util = BufferCopyUtil::new(2048);
+        let buffer_copy_util = BufferCopyUtil::new(gpu.device.clone(), 2048);
 
         let wireframe: Box<dyn Scene3dView> = Box::new(WireframeView::new(
             gpu,
@@ -1259,8 +1259,8 @@ impl WireframeView {
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Basic 3D Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout.get()],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[bind_group_layout.get_ref()],
+            immediate_size: 0,
         });
 
         let pipeline = render_pipeline!(
@@ -1299,7 +1299,7 @@ impl WireframeView {
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             }
         );
@@ -1339,6 +1339,7 @@ impl Scene3dView for WireframeView {
                 depth_stencil_attachment: None,
                 timestamp_writes: queries.render_pass_writes("rp_aurora_scene_3d"),
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             render_pass.set_pipeline(&self.pipeline.get()?);
             render_pass.set_bind_group(0, &self.bind_group, &[]);

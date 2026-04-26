@@ -157,8 +157,8 @@ impl<A: bytemuck::Pod, B: bytemuck::Pod> ComputeTestEnvironment<A, B> {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("aurora_test_main_pipeline_layout"),
-                    bind_group_layouts: &[&self.bind_group_layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&self.bind_group_layout)],
+                    immediate_size: 0,
                 });
 
         self.pipeline = Some(compute_pipeline!(
@@ -200,7 +200,7 @@ impl<A: bytemuck::Pod, B: bytemuck::Pod> ComputeTestEnvironment<A, B> {
                 .map_async(wgpu::MapMode::Write, .., move |res| {
                     res.expect("Failed to map upload staging buffer for writing");
                     let mut view = buffer.get_mapped_range_mut(..);
-                    let (a_bytes, b_bytes) = view.split_at_mut(upload_a.len());
+                    let (mut a_bytes, mut b_bytes) = view.slice(..).split_at(upload_a.len());
                     a_bytes.copy_from_slice(&upload_a);
                     b_bytes.copy_from_slice(&upload_b);
 
