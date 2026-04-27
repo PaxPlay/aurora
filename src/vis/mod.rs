@@ -8,7 +8,7 @@ use crate::{
     Buffer, CommandEncoderTimestampExt, DebugUi, GpuContext, RenderTarget, Scene, TimestampQueries,
 };
 use futures_lite::AsyncReadExt;
-use glam::{vec3, Mat4, Vec3};
+use glam::{vec3, vec4, Mat4, Vec3, Vec4, Vec4Swizzles};
 use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
@@ -36,6 +36,8 @@ pub enum CreateScalarFieldSceneError {
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScalarFieldParameters {
     model_matrix: Mat4,
+    origin: Vec4,
+    bb_size: Vec4,
 }
 
 impl TryFrom<&nrrd::NRRDHeader> for ScalarFieldParameters {
@@ -88,14 +90,27 @@ impl TryFrom<&nrrd::NRRDHeader> for ScalarFieldParameters {
             })
             .collect::<Result<Vec<Vec3>, CreateScalarFieldSceneError>>()?;
 
+        let sizes: [f32; 3] = [
+            header.sizes[0].get() as f32,
+            header.sizes[1].get() as f32,
+            header.sizes[2].get() as f32,
+        ];
+
         let model_matrix = Mat4::from_cols(
-            directions[0].extend(0.0),
-            directions[1].extend(0.0),
-            directions[2].extend(0.0),
+            directions[0].extend(0.0) * sizes[0],
+            directions[1].extend(0.0) * sizes[1],
+            directions[2].extend(0.0) * sizes[2],
             origin.extend(1.0),
         );
 
-        Ok(ScalarFieldParameters { model_matrix })
+        let bb_size =
+            directions[0] * sizes[0] + directions[1] * sizes[1] + directions[2] * sizes[2];
+
+        Ok(ScalarFieldParameters {
+            model_matrix,
+            origin: origin.extend(0.0),
+            bb_size: bb_size.extend(0.0),
+        })
     }
 }
 
@@ -158,6 +173,13 @@ impl ScalarFieldScene {
             ));
         }
 
+        let parameters = ScalarFieldParameters::try_from(&header)?;
+        let parameter_buffer = gpu.create_buffer_init(
+            "aur_buf_sf_parameters",
+            &[parameters],
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
         let texture_size = wgpu::Extent3d {
             width: header.sizes[0].get() as u32,
             height: header.sizes[1].get() as u32,
@@ -192,15 +214,20 @@ impl ScalarFieldScene {
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
-            .add_texture(
+            .add_buffer(
                 1,
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+            )
+            .add_texture(
+                2,
                 wgpu::ShaderStages::FRAGMENT,
                 wgpu::TextureSampleType::Float { filterable: true },
                 wgpu::TextureViewDimension::D3,
                 false,
             )
             .add_sampler(
-                2,
+                3,
                 wgpu::ShaderStages::FRAGMENT,
                 wgpu::SamplerBindingType::Filtering,
             )
@@ -221,12 +248,12 @@ impl ScalarFieldScene {
 
         let camera = CameraWithBuffer::new(
             Camera3d::Centered {
-                position: vec3(0.5, 0.5, 0.5),
+                position: parameters.origin.xyz() + parameters.bb_size.xyz() / 2.0,
                 angle: vec3(-PI / 4.0, PI / 4.0, 0.0).into(),
-                distance: 3.0,
+                distance: parameters.bb_size.xyz().length(),
                 fov: 60.0,
                 near: 0.1,
-                far: 20.0,
+                far: parameters.bb_size.xyz().length() * 10.0,
                 aspect_ratio: 1.0,
             },
             gpu.clone(),
@@ -236,11 +263,12 @@ impl ScalarFieldScene {
             .bind_group_builder()
             .label("aur_bg_scalar_field")
             .buffer(0, &camera.buffer)
+            .buffer(1, &parameter_buffer)
             .texture(
-                1,
+                2,
                 scalar_field_texture.create_view(&wgpu::TextureViewDescriptor::default()),
             )
-            .sampler(2, sampler)
+            .sampler(3, sampler)
             .build()
             .map_err(|e| {
                 CreateScalarFieldSceneError::GPUResourcesError(format!(
