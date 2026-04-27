@@ -1,4 +1,4 @@
-use crate::buffers::BufferCopyUtil;
+use crate::buffers::{BufferCopyContext, BufferCopyUtil, MirroredBuffer};
 use crate::scenes::SceneRenderError;
 use crate::shader::BindGroupLayoutBuilder;
 use crate::{
@@ -13,6 +13,8 @@ use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
+use wgpu::util::DeviceExt;
+use wgpu::Origin3d;
 use winit::event::{DeviceEvent, WindowEvent};
 
 pub mod nrrd;
@@ -36,6 +38,7 @@ pub enum CreateScalarFieldSceneError {
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScalarFieldParameters {
     model_matrix: Mat4,
+    world_to_field: Mat4,
     origin: Vec4,
     bb_size: Vec4,
 }
@@ -108,9 +111,28 @@ impl TryFrom<&nrrd::NRRDHeader> for ScalarFieldParameters {
 
         Ok(ScalarFieldParameters {
             model_matrix,
+            world_to_field: model_matrix.inverse(),
             origin: origin.extend(0.0),
             bb_size: bb_size.extend(0.0),
         })
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct RenderParameters {
+    isosurface_value: f32,
+    isosurface_stddev: f32,
+    step_size: f32,
+}
+
+impl Default for RenderParameters {
+    fn default() -> Self {
+        RenderParameters {
+            isosurface_value: 0.5,
+            isosurface_stddev: 50.0,
+            step_size: 1.0,
+        }
     }
 }
 
@@ -123,6 +145,7 @@ pub struct ScalarFieldScene {
     index_buffer: Buffer<u32>,
     bind_group: wgpu::BindGroup,
     buffer_copy_util: BufferCopyUtil,
+    render_parameters: MirroredBuffer<RenderParameters>,
 }
 
 impl ScalarFieldScene {
@@ -208,6 +231,22 @@ impl ScalarFieldScene {
             view_formats: &[texture_format],
         });
 
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &scalar_field_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(header.sizes[0].get() as u32),
+                rows_per_image: Some(header.sizes[1].get() as u32),
+            },
+            texture_size,
+        );
+
         let bind_group_layout = BindGroupLayoutBuilder::new(gpu.clone())
             .add_buffer(
                 0,
@@ -219,15 +258,20 @@ impl ScalarFieldScene {
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 wgpu::BufferBindingType::Uniform,
             )
-            .add_texture(
+            .add_buffer(
                 2,
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                wgpu::BufferBindingType::Uniform,
+            )
+            .add_texture(
+                3,
                 wgpu::ShaderStages::FRAGMENT,
                 wgpu::TextureSampleType::Float { filterable: true },
                 wgpu::TextureViewDimension::D3,
                 false,
             )
             .add_sampler(
-                3,
+                4,
                 wgpu::ShaderStages::FRAGMENT,
                 wgpu::SamplerBindingType::Filtering,
             )
@@ -259,16 +303,24 @@ impl ScalarFieldScene {
             gpu.clone(),
         );
 
+        let render_parameters = MirroredBuffer::new(
+            &gpu,
+            "aur_buf_sf_render_parameters",
+            1,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::UNIFORM,
+        );
+
         let bind_group = bind_group_layout
             .bind_group_builder()
             .label("aur_bg_scalar_field")
             .buffer(0, &camera.buffer)
             .buffer(1, &parameter_buffer)
+            .buffer(2, &render_parameters)
             .texture(
-                2,
+                3,
                 scalar_field_texture.create_view(&wgpu::TextureViewDescriptor::default()),
             )
-            .sampler(3, sampler)
+            .sampler(4, sampler)
             .build()
             .map_err(|e| {
                 CreateScalarFieldSceneError::GPUResourcesError(format!(
@@ -365,6 +417,18 @@ impl ScalarFieldScene {
             index_buffer,
             bind_group,
             buffer_copy_util,
+            render_parameters,
+        })
+    }
+
+    fn do_copy_pass(&mut self, gpu: &GpuContext) -> wgpu::CommandBuffer {
+        self.camera.process_controller_update();
+        self.buffer_copy_util.create_copy_command(gpu, |ctx| {
+            if !self.camera.is_buffer_current() {
+                self.camera.update_buffer(ctx);
+            }
+
+            self.render_parameters.write(ctx);
         })
     }
 }
@@ -376,14 +440,7 @@ impl Scene for ScalarFieldScene {
         queries: &mut TimestampQueries,
     ) -> Result<Vec<wgpu::CommandBuffer>, SceneRenderError> {
         let mut result = Vec::with_capacity(2);
-
-        self.camera.process_controller_update();
-        if !self.camera.is_buffer_current() {
-            result.push(
-                self.buffer_copy_util
-                    .create_copy_command(&gpu, |ctx| self.camera.update_buffer(ctx)),
-            );
-        }
+        result.push(self.do_copy_pass(&gpu));
 
         let mut ce = gpu
             .device
@@ -423,6 +480,37 @@ impl Scene for ScalarFieldScene {
 
     fn draw_ui(&mut self, ui: &mut egui::Ui) {
         self.camera.draw_ui(ui);
+
+        ui.separator();
+
+        if ui.button("Reset Parameters").clicked() {
+            self.render_parameters[0] = Default::default();
+        }
+
+        ui.horizontal(|ui| {
+            ui.add(egui::Slider::new(
+                &mut self.render_parameters[0].isosurface_value,
+                0.0..=1.0,
+            ));
+            ui.label("Isosurface Value");
+        });
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Slider::new(
+                    &mut self.render_parameters[0].isosurface_stddev,
+                    10.0..=2000.0,
+                )
+                .logarithmic(true),
+            );
+            ui.label("Isosurface Stddev");
+        });
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Slider::new(&mut self.render_parameters[0].step_size, 0.001..=10.0)
+                    .logarithmic(true),
+            );
+            ui.label("Step Size");
+        });
     }
 
     fn update_target_parameters(&mut self, _gpu: Arc<GpuContext>, _target: Arc<RenderTarget>) {}
