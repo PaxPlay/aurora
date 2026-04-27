@@ -123,7 +123,7 @@ impl Angle {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 #[serde(tag = "type")]
 pub enum Camera3d {
     Centered {
@@ -492,6 +492,7 @@ impl CameraController {
 
 pub struct CameraWithBuffer {
     pub camera: Camera3d,
+    initial_camera: Camera3d,
     pub resolution: [u32; 2],
     pub buffer: Buffer<CameraBuffer>,
     pub controller: CameraController,
@@ -511,6 +512,7 @@ impl CameraWithBuffer {
 
         Self {
             camera,
+            initial_camera: camera,
             resolution,
             buffer,
             controller: CameraController::new(),
@@ -551,6 +553,11 @@ impl DebugUi for CameraWithBuffer {
     fn draw_ui(&mut self, ui: &mut egui::Ui) -> bool {
         let camera = &mut self.camera;
         let mut changed = false;
+
+        if ui.button("Reset").clicked() {
+            *camera = self.initial_camera;
+            changed = true;
+        }
 
         let current_type = match camera {
             &mut Camera3d::Centered { .. } => 0u32,

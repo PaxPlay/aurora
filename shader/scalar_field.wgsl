@@ -68,14 +68,13 @@ fn fs_main(
     in: VertexOutput,
 ) -> @location(0) vec4<f32> {
     let ray_direction = normalize(in.world_pos - camera.origin);
-    var position = in.world_pos + EPSILON * ray_direction;
-    var field_position = field_pos(position);
+    var position = in.world_pos + EPSILON * ray_direction; // World position
+    var field_position = field_pos(position); // Coordinates within [0, 1]^3 cube, used for texture accesses
 
     var color = vec3<f32>(0.0);
     var transmittance = 1.0;
 
     let step_size = render_parameters.step_size;
-    var num_steps = 0;
 
     while is_in_volume(field_position) && transmittance > EPSILON {
         let value = textureSample(field_texture, field_sampler, field_position).r;
@@ -87,10 +86,6 @@ fn fs_main(
         let emission = vec3<f32>(1.0) * step_size;
         color += transmittance * alpha * emission;
         transmittance *= local_transmittance;
-        color = vec3(max(tf(value), color.r));
-//        color = vec3(max(value, color.r));
-
-        num_steps += 1;
     }
 
     return vec4(color, 1.0 - transmittance);
