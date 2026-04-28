@@ -194,6 +194,7 @@ dependencies = [
  "egui-winit",
  "egui_extras",
  "egui_plot",
+ "emath",
  "env_logger",
  "exr",
  "futures",

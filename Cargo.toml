@@ -50,6 +50,7 @@ serde = { version = "1.0.225", features = ["derive"] }
 serde_arrays = "0.2.0"
 web-time = "1.1.0"
 futures-lite = "2.6.1"
+emath = "0.34.1"
 
 # egui mouse pointer capture behavior is broken, fixed by https://github.com/emilk/egui/commit/b117a1ac19954199bb60230ee758b89bd91ab1d8
 [patch.crates-io]

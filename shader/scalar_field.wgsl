@@ -21,6 +21,7 @@ struct CameraBuffer {
 struct ScalarFieldParameters {
     model_matrix: mat4x4<f32>,
     world_to_field: mat4x4<f32>,
+    field_size: vec3<u32>,
     origin: vec3<f32>,
     bb_size: vec3<f32>,
 }
@@ -83,8 +84,7 @@ fn fs_main(
 
         let local_transmittance = exp(-tf(value) * step_size);
         let alpha = 1.0 - local_transmittance;
-        let emission = vec3<f32>(1.0) * step_size;
-        color += transmittance * alpha * emission;
+        color += transmittance * alpha * vec3(1.0);
         transmittance *= local_transmittance;
     }
 

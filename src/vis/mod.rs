@@ -1,23 +1,25 @@
-use crate::buffers::{BufferCopyContext, BufferCopyUtil, MirroredBuffer};
+use crate::buffers::{BufferCopyUtil, MirroredBuffer};
 use crate::scenes::SceneRenderError;
-use crate::shader::BindGroupLayoutBuilder;
+use crate::shader::{BindGroupLayout, BindGroupLayoutBuilder, ComputePipeline};
+use crate::vis::tf::{Histogram1d, TransferFunctionWidget1d};
 use crate::{
-    register_default, render_pipeline,
+    compute_pipeline, dispatch_size, register_default, render_pipeline,
     scenes::{Camera3d, CameraWithBuffer},
     shader::RenderPipeline,
     Buffer, CommandEncoderTimestampExt, DebugUi, GpuContext, RenderTarget, Scene, TimestampQueries,
 };
 use futures_lite::AsyncReadExt;
-use glam::{vec3, vec4, Mat4, Vec3, Vec4, Vec4Swizzles};
+use glam::{uvec4, vec3, vec4, Mat4, UVec4, Vec3, Vec4, Vec4Swizzles};
+use log::{debug, info};
 use std::f32::consts::PI;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
-use wgpu::util::DeviceExt;
 use wgpu::Origin3d;
 use winit::event::{DeviceEvent, WindowEvent};
 
 pub mod nrrd;
+mod tf;
 
 #[derive(Error, Debug)]
 pub enum CreateScalarFieldSceneError {
@@ -39,6 +41,7 @@ pub enum CreateScalarFieldSceneError {
 struct ScalarFieldParameters {
     model_matrix: Mat4,
     world_to_field: Mat4,
+    field_size: UVec4,
     origin: Vec4,
     bb_size: Vec4,
 }
@@ -93,10 +96,17 @@ impl TryFrom<&nrrd::NRRDHeader> for ScalarFieldParameters {
             })
             .collect::<Result<Vec<Vec3>, CreateScalarFieldSceneError>>()?;
 
+        let field_size = uvec4(
+            header.sizes[0].get() as u32,
+            header.sizes[1].get() as u32,
+            header.sizes[2].get() as u32,
+            0u32,
+        );
+
         let sizes: [f32; 3] = [
-            header.sizes[0].get() as f32,
-            header.sizes[1].get() as f32,
-            header.sizes[2].get() as f32,
+            field_size.x as f32,
+            field_size.y as f32,
+            field_size.z as f32,
         ];
 
         let model_matrix = Mat4::from_cols(
@@ -112,6 +122,7 @@ impl TryFrom<&nrrd::NRRDHeader> for ScalarFieldParameters {
         Ok(ScalarFieldParameters {
             model_matrix,
             world_to_field: model_matrix.inverse(),
+            field_size,
             origin: origin.extend(0.0),
             bb_size: bb_size.extend(0.0),
         })
@@ -146,6 +157,7 @@ pub struct ScalarFieldScene {
     bind_group: wgpu::BindGroup,
     buffer_copy_util: BufferCopyUtil,
     render_parameters: MirroredBuffer<RenderParameters>,
+    transfer_function_widget: TransferFunctionWidget1d,
 }
 
 impl ScalarFieldScene {
@@ -408,6 +420,15 @@ impl ScalarFieldScene {
 
         let buffer_copy_util = BufferCopyUtil::new(gpu.device.clone(), 2048);
 
+        let transfer_function_widget = TransferFunctionWidget1d::new();
+        let mut util = ScalarFieldUtils::new(gpu.clone());
+        util.preprocess(
+            &gpu,
+            scalar_field_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            parameters,
+            transfer_function_widget.histogram_data.clone(),
+        );
+
         Ok(ScalarFieldScene {
             data,
             scalar_field_texture,
@@ -418,6 +439,7 @@ impl ScalarFieldScene {
             bind_group,
             buffer_copy_util,
             render_parameters,
+            transfer_function_widget,
         })
     }
 
@@ -511,6 +533,9 @@ impl Scene for ScalarFieldScene {
             );
             ui.label("Step Size");
         });
+
+        ui.separator();
+        self.transfer_function_widget.draw_ui(ui);
     }
 
     fn update_target_parameters(&mut self, _gpu: Arc<GpuContext>, _target: Arc<RenderTarget>) {}
@@ -520,5 +545,128 @@ impl Scene for ScalarFieldScene {
     }
     fn on_device_event(&mut self, event: &DeviceEvent) -> bool {
         self.camera.controller.on_device_event(event)
+    }
+}
+
+/// Compute shader based utils for histogram creation, gradient precomputation, etc
+struct ScalarFieldUtils {
+    histogram_pipeline: ComputePipeline,
+    bind_group_layout: BindGroupLayout,
+}
+
+impl ScalarFieldUtils {
+    fn new(gpu: Arc<GpuContext>) -> Self {
+        register_default!(gpu.shaders, "scalar_field_utils", "scalar_field_utils.wgsl");
+
+        let bind_group_layout = BindGroupLayoutBuilder::new(gpu.clone())
+            .label("aur_bgl_sf_util")
+            .add_texture(
+                0,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::TextureSampleType::Float { filterable: false },
+                wgpu::TextureViewDimension::D3,
+                false,
+            )
+            .add_buffer(
+                1,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Uniform,
+            )
+            .add_buffer(
+                2,
+                wgpu::ShaderStages::COMPUTE,
+                wgpu::BufferBindingType::Storage { read_only: false },
+            )
+            .build();
+
+        let pipeline_layout = gpu
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("aur_pl_sf_util"),
+                bind_group_layouts: &[bind_group_layout.get_ref()],
+                immediate_size: 0,
+            });
+
+        let histogram_pipeline = compute_pipeline!(gpu, scalar_field_utils; &wgpu::ComputePipelineDescriptor {
+            label: Some("aur_cp_histogram"),
+            layout: Some(&pipeline_layout),
+            module: &scalar_field_utils,
+            entry_point: Some("cs_histogram"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        Self {
+            histogram_pipeline,
+            bind_group_layout,
+        }
+    }
+
+    fn preprocess(
+        &mut self,
+        gpu: &GpuContext,
+        scalar_field: wgpu::TextureView,
+        scalar_field_parameters: ScalarFieldParameters,
+        histogram_data: Arc<Mutex<Option<Histogram1d>>>,
+    ) {
+        let parameter_buffer = gpu.create_buffer_init(
+            "aur_buf_sf_preprocess_parameters",
+            &[scalar_field_parameters],
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+
+        let histogram: Buffer<u32> = gpu.create_buffer_init(
+            "aur_buf_sf_histogram",
+            &[0; 129],
+            wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::STORAGE,
+        );
+
+        let bind_group = self
+            .bind_group_layout
+            .bind_group_builder()
+            .texture(0, scalar_field)
+            .buffer(1, &parameter_buffer)
+            .buffer(2, &histogram)
+            .build()
+            .expect("Scalar field preprocess bind group creation failed");
+
+        let mut ce = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("aur_ce_sf_histogram"),
+            });
+
+        {
+            let mut cp = ce.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("aur_cp_histogram"),
+                timestamp_writes: None,
+            });
+            cp.set_pipeline(&self.histogram_pipeline.get().unwrap());
+            cp.set_bind_group(0, &bind_group, &[]);
+            let size = scalar_field_parameters.field_size;
+            let (dx, dy, dz) = dispatch_size((size.x, size.y, size.z), (8, 4, 4));
+            cp.dispatch_workgroups(dx, dy, dz);
+        }
+
+        gpu.queue.submit(std::iter::once(ce.finish()));
+
+        wgpu::util::DownloadBuffer::read_buffer(
+            &gpu.device,
+            &gpu.queue,
+            &histogram.buffer.slice(..),
+            move |buf| {
+                let buf = buf.expect("DownloadBuffer failed");
+                let data: &[u32] = bytemuck::cast_slice(&buf[..]);
+
+                let histogram_values = Histogram1d {
+                    total: data[128],
+                    max: *data[0..128].iter().max().unwrap(),
+                    values: data[0..128].to_vec(),
+                };
+
+                let mut histogram = histogram_data.lock().unwrap();
+                *histogram = Some(histogram_values);
+            },
+        )
     }
 }
