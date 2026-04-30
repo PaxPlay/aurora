@@ -340,11 +340,16 @@ impl ScalarFieldScene {
                 ))
             })?;
 
+        let transfer_function_widget = TransferFunctionWidget1d::new(gpu.clone());
+
         let pipeline_layout = gpu
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("aur_pipeline_layout_scalar_field"),
-                bind_group_layouts: &[bind_group_layout.get_ref()],
+                bind_group_layouts: &[
+                    bind_group_layout.get_ref(),
+                    transfer_function_widget.get_bind_group_layout().get_ref(),
+                ],
                 immediate_size: 0,
             });
 
@@ -420,7 +425,6 @@ impl ScalarFieldScene {
 
         let buffer_copy_util = BufferCopyUtil::new(gpu.device.clone(), 2048);
 
-        let transfer_function_widget = TransferFunctionWidget1d::new();
         let mut util = ScalarFieldUtils::new(gpu.clone());
         util.preprocess(
             &gpu,
@@ -492,6 +496,7 @@ impl Scene for ScalarFieldScene {
             rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             rp.set_bind_group(0, &self.bind_group, &[]);
+            rp.set_bind_group(1, &self.transfer_function_widget.get_bind_group(), &[]);
             rp.draw_indexed(0..36, 0, 0..1);
         }
 

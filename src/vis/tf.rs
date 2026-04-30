@@ -1,3 +1,5 @@
+use crate::shader::{BindGroupLayout, BindGroupLayoutBuilder};
+use crate::GpuContext;
 use egui::epaint::PathShape;
 use egui::widget_text::RichText;
 use egui::{pos2, Color32, Frame, Painter, Response, Sense, Shape, Stroke, Ui, Vec2, Widget};
@@ -18,10 +20,14 @@ pub struct TransferFunctionWidget1d {
     line_stroke: Stroke,
     pub histogram_data: Arc<Mutex<Option<Histogram1d>>>,
     histogram_shift: i32,
+    colormaps: Vec<(String, ColormapTexture)>,
+    selected_colormap: usize,
+    bind_group_layout: BindGroupLayout,
+    bind_group: Option<wgpu::BindGroup>,
 }
 
 impl TransferFunctionWidget1d {
-    pub fn new() -> Self {
+    pub fn new(gpu: Arc<GpuContext>) -> Self {
         let point_list = vec![
             pos2(0.0, 1.0),
             pos2(1.0, 0.0),
@@ -33,13 +39,66 @@ impl TransferFunctionWidget1d {
         point_list_sorted
             .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
 
+        let mut colormaps = Vec::with_capacity(2);
+        colormaps.push((
+            "Viridis".to_string(),
+            ColormapTexture::new(&gpu.device, &gpu.queue, &Colormap::viridis(), "viridis"),
+        ));
+        colormaps.push((
+            "Plasma".to_string(),
+            ColormapTexture::new(&gpu.device, &gpu.queue, &Colormap::plasma(), "plasma"),
+        ));
+
+        let bind_group_layout = BindGroupLayoutBuilder::new(gpu.clone())
+            .label("aur_tf_bind_group_layout")
+            .add_texture(
+                0,
+                wgpu::ShaderStages::all(),
+                wgpu::TextureSampleType::Float { filterable: true },
+                wgpu::TextureViewDimension::D1,
+                false,
+            )
+            .add_sampler(
+                1,
+                wgpu::ShaderStages::all(),
+                wgpu::SamplerBindingType::Filtering,
+            )
+            .build();
+
         TransferFunctionWidget1d {
             point_list,
             point_list_sorted,
             line_stroke: Stroke::new(1.0, Color32::RED),
             histogram_data: Arc::new(Mutex::new(None)),
             histogram_shift: 4,
+            colormaps,
+            selected_colormap: 0,
+            bind_group_layout,
+            bind_group: None,
         }
+    }
+
+    pub fn get_bind_group(&mut self) -> wgpu::BindGroup {
+        if let Some(bind_group) = &self.bind_group {
+            bind_group.clone()
+        } else {
+            let (_name, cmap) = &self.colormaps[self.selected_colormap];
+            let view = cmap.view.clone();
+            let sampler = cmap.sampler.clone();
+            self.bind_group = Some(
+                self.bind_group_layout
+                    .bind_group_builder()
+                    .texture(0, view)
+                    .sampler(1, sampler)
+                    .build()
+                    .unwrap(),
+            );
+            self.bind_group.as_ref().unwrap().clone()
+        }
+    }
+
+    pub fn get_bind_group_layout(&self) -> &BindGroupLayout {
+        &self.bind_group_layout
     }
 
     fn draw_histogram(&self, painter: &Painter, to_screen: RectTransform) {
@@ -179,6 +238,17 @@ impl TransferFunctionWidget1d {
             }
         });
         Frame::canvas(ui.style()).show(ui, |ui| self.draw_control_points(ui));
+        let old_cmap_value = self.selected_colormap;
+        egui::ComboBox::from_label("Colormap")
+            .selected_text(&self.colormaps[self.selected_colormap].0)
+            .show_ui(ui, |ui| {
+                for (i, (name, _cmap)) in self.colormaps.iter().enumerate() {
+                    ui.selectable_value(&mut self.selected_colormap, i, name);
+                }
+            });
+        if self.selected_colormap != old_cmap_value {
+            self.bind_group = None;
+        }
     }
 }
 
@@ -201,11 +271,11 @@ impl Colormap {
         // import matplotlib
         // for c in matplotlib.colormaps.get("viridis").colors:
         //     print(f"{c},")
-        Self::from_color_arrays(vec![include!("../../data/colormaps/viridis")])
+        Self::from_color_arrays(include!("../../data/colormaps/viridis").into())
     }
 
     pub fn plasma() -> Self {
-        Self::from_color_arrays(vec![include!("../../data/colormaps/plasma")])
+        Self::from_color_arrays(include!("../../data/colormaps/plasma").into())
     }
 }
 
@@ -235,7 +305,7 @@ impl ColormapTexture {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D1,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });
 

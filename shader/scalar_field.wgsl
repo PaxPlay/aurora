@@ -38,6 +38,9 @@ struct RenderParameters {
 @group(0) @binding(3) var field_texture: texture_3d<f32>;
 @group(0) @binding(4) var field_sampler: sampler;
 
+@group(1) @binding(0) var cmap_texture: texture_1d<f32>;
+@group(1) @binding(1) var cmap_sampler: sampler;
+
 @vertex
 fn vs_main(
     in: VertexInput,
@@ -83,8 +86,10 @@ fn fs_main(
         field_position = field_pos(position);
 
         let local_transmittance = exp(-tf(value) * step_size);
+        let emission = textureSample(cmap_texture, cmap_sampler, value).rgb;
+
         let alpha = 1.0 - local_transmittance;
-        color += transmittance * alpha * vec3(1.0);
+        color += transmittance * alpha * emission;
         transmittance *= local_transmittance;
     }
 
