@@ -9,8 +9,8 @@ use crate::{
     Buffer, CommandEncoderTimestampExt, DebugUi, GpuContext, RenderTarget, Scene, TimestampQueries,
 };
 use futures_lite::AsyncReadExt;
-use glam::{uvec4, vec3, vec4, Mat4, UVec4, Vec3, Vec4, Vec4Swizzles};
-use log::{debug, info};
+use glam::{uvec4, vec3, Mat4, UVec4, Vec3, Vec4, Vec4Swizzles};
+use log::info;
 use std::f32::consts::PI;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
